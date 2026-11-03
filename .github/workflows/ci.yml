@@ -9,13 +9,18 @@ concurrency:
 
 jobs:
   # Python 侧：语法、导入、数据源配置自检。放 ubuntu 是因为 runner 队列快，几秒出结果。
+  # 跑 3.11 和 3.12：3.11 是下限（tomllib 从 3.11 才进标准库），必须验证。
   python:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
       - name: 语法与导入检查
         run: |
           python3 -m compileall -q src
@@ -23,6 +28,16 @@ jobs:
       - name: 数据源配置自检
         run: |
           PYTHONPATH=src python3 -m dotusage.cli sources
+      - name: 内置配置不能是空的
+        # 这条守的是「配置静默读空」那类坑：
+        # 解释器版本不对时 tomllib 缺失，配置会被读成空，采集还「成功」但一行数据都没有。
+        run: |
+          PYTHONPATH=src python3 -c "
+          from dotusage.sources.loader import load_config
+          specs = load_config()
+          assert specs, '内置数据源配置读出来是空的 —— 配置读失败不能静默通过'
+          print(f'内置源 {len(specs)} 个：', ', '.join(s.id for s in specs))
+          "
 
   # 菜单栏 App：macOS 专属（AppKit），只能在 macOS runner 上编译。
   macos:

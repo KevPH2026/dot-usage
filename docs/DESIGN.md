@@ -265,7 +265,7 @@ core 和 cards 都不知道 sink 的存在 —— 这是分层的意义。
 | 官方配额只有五家 | ChatGPT / z.ai / MiniMax / DeepSeek / Grok。Claude Code 官方没给配额接口 |
 | Grok 只给档位 | xAI 没有配额 % 接口，卡上标的是订阅档位 |
 | 通用 jsonl 适配器读不了 Codex | 它的行过滤要求行内含 `"usage"` / `"tokens"`，而 Codex 用 `total_token_usage`。Codex 走内置 `codex_rollouts` 适配器 |
-| 图标路径有两套 | `util/config.py:icon_dir()` 已经支持环境变量 `DOT_USAGE_ICON_DIR` 和包旁边的 `icons/png`，但 `util/icons.py` 里还写死着 `~/Tools/dot-usage/icons/png`，两处要统一 |
-| 菜单栏 App 路径写死 | `menubar/DotUsageBar.swift` 里 `~/Tools/dot-usage` 是硬编码的 |
-| 仓库里还有一份旧单体实现 | 根目录的 `dot_usage/` 是早期实现；当前发布的是 `src/dotusage/`（`pyproject.toml` 按 `src` 打包）。`install.sh` 和 `launchd/*.plist` 仍指向旧模块名 `dot_usage.cli`，发布前要一并改掉 |
-| 命令行入口是 `dotusage.cli:main` | 没有 `__main__.py`，所以 `python -m dotusage` 不通。要用 `python3 -m dotusage.cli …` 或装完后的 `dot-usage` |
+| 图标目录有三层兜底 | `util/config.py:icon_dir()`：环境变量 `DOT_USAGE_ICON_DIR` → 包旁边的 `icons/png` → `~/Tools/dot-usage/icons/png`。菜单栏 App 侧同样有兜底链（`macos/DotUsageBar.swift`） |
+| 菜单栏 App 的兜底路径写死家目录 | `macos/DotUsageBar.swift` 里 `~/Tools/dot-usage/icons/png` 和 `~/Tools/dot-usage/preview/card-preview.html` 是最后兜底，装到别处时靠前两层（环境变量 / 包内） |
+| **Python 必须 3.11+** | 数据源配置用标准库 `tomllib` 读，3.9/3.10 没有它。踩过的坑：解释器是 `/usr/bin/python3`（3.9）时，配置被静默读成空，采集还「成功」，只是没数据源。现在 `sources/loader.py` 读不到 `tomllib` 直接报错退出，`cli.py` 入口也会拦一道；`install.sh` 自动挑 3.11+ 的解释器并写进 `launchd/*.plist`（`__PYTHON__` 占位） |
+| 命令行入口有两个 | `python -m dotusage …`（有 `__main__.py`）、`python -m dotusage.cli …`、以及装完后的 `dot-usage` 命令，三种都能用 |

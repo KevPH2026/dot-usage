@@ -1,27 +1,55 @@
 #!/bin/bash
 # 安装 dot-usage：构建菜单栏 App + 注册 15 分钟定时采集。
-# 用法： bash ~/Tools/dot-usage/install.sh
+# 用法： bash <仓库路径>/install.sh
 set -euo pipefail
 
-TOOL_DIR="$HOME/Tools/dot-usage"
+# 仓库就在哪就装哪，不写死家目录。
+TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$HOME/Applications"
 APP_BUNDLE="$APP_DIR/DotUsageBar.app"
 AGENTS="$HOME/Library/LaunchAgents"
 STATE="$HOME/.local/state/dot-usage"
 
-echo "== 1/4 准备目录 =="
+# ── 选一个 Python 3.11+ ────────────────────────────────────────────────
+# 必须是 3.11+：数据源配置用标准库 tomllib 读，3.9/3.10 没有。
+# macOS 自带的 /usr/bin/python3 是 3.9，千万别用它。
+pick_python() {
+  for c in python3.14 python3.13 python3.12 python3.11 python3; do
+    p=$(command -v "$c" 2>/dev/null) || continue
+    if "$p" -c 'import sys,tomllib; raise SystemExit(0 if sys.version_info>=(3,11) else 1)' 2>/dev/null; then
+      echo "$p"; return 0
+    fi
+  done
+  return 1
+}
+
+echo "== 1/5 选解释器 =="
+if ! PYTHON=$(pick_python); then
+  echo "  ✗ 没找到 Python 3.11+ 的解释器。"
+  echo "    dot-usage 读数据源配置要用标准库 tomllib（3.11 才进标准库）。"
+  echo "    装一个： brew install python@3.12   然后重跑本脚本。"
+  exit 1
+fi
+echo "  ✓ ${PYTHON} ($("$PYTHON" --version 2>&1))"
+
+echo "== 2/5 准备目录 =="
 mkdir -p "$APP_DIR" "$AGENTS" "$STATE" "$TOOL_DIR/preview"
 chmod 700 "$STATE" 2>/dev/null || true
 
-echo "== 2/5 安装 Python 包 =="
+echo "== 3/5 安装 Python 包 =="
+# 只是为了多一个 `dot-usage` 命令；装不上也不影响运行
+# （定时任务走 PYTHONPATH，见下面注册的 plist）。
 cd "$TOOL_DIR"
-if python3 -m pip install -e . --quiet 2>/dev/null; then
+if "$PYTHON" -m pip install -e . --quiet 2>/dev/null; then
   echo "  ✓ 已 pip install -e .（命令：dot-usage）"
+elif "$PYTHON" -m pip install -e . --user --quiet 2>/dev/null; then
+  echo "  ✓ 已 pip install -e . --user（命令：dot-usage）"
 else
-  echo "  ! pip 安装失败，改用 PYTHONPATH 方式"
+  echo "  · 跳过 pip 安装（系统 Python 受 PEP 668 保护）。不影响使用，"
+  echo "    定时任务走 PYTHONPATH 加载 ${TOOL_DIR}/src"
 fi
 
-echo "== 3/5 编译菜单栏 App =="
+echo "== 4/5 编译菜单栏 App =="
 cd "$TOOL_DIR/macos"
 mkdir -p build
 swiftc -O -parse-as-library -target arm64-apple-macos13.0 DotUsageBar.swift -o build/DotUsageBar
@@ -46,12 +74,13 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-echo "  ✓ $APP_BUNDLE"
+echo "  ✓ ${APP_BUNDLE}"
 
-echo "== 4/5 注册 LaunchAgent =="
-# plist 里用 __HOME__ 占位，拷的时候换成真实家目录
+echo "== 5/5 注册 LaunchAgent =="
+# plist 里用 __HOME__ / __PYTHON__ 占位，拷的时候换成真实值。
+# __PYTHON__ 必须替换：写死 /usr/bin/python3 会拿到 3.9，配置读不出来。
 for f in "$TOOL_DIR"/launchd/*.plist; do
-  sed "s|__HOME__|$HOME|g" "$f" > "$AGENTS/$(basename "$f")"
+  sed -e "s|__HOME__|$HOME|g" -e "s|__PYTHON__|$PYTHON|g" "$f" > "$AGENTS/$(basename "$f")"
 done
 launchctl bootout "gui/$(id -u)/com.mavis.dotusage.collect" 2>/dev/null || true
 launchctl bootout "gui/$(id -u)/com.mavis.dotusage.menubar" 2>/dev/null || true
@@ -59,12 +88,12 @@ launchctl bootstrap "gui/$(id -u)" "$AGENTS/com.mavis.dotusage.collect.plist"
 launchctl bootstrap "gui/$(id -u)" "$AGENTS/com.mavis.dotusage.menubar.plist"
 launchctl enable "gui/$(id -u)/com.mavis.dotusage.collect" 2>/dev/null || true
 launchctl enable "gui/$(id -u)/com.mavis.dotusage.menubar" 2>/dev/null || true
-echo "  ✓ 定时采集：每 15 分钟"
+echo "  ✓ 定时采集：每 15 分钟（解释器 ${PYTHON}）"
 echo "  ✓ 菜单栏 App：开机自启"
 
-echo "== 5/5 首次采集 =="
+echo "== 首次采集 =="
 cd "$TOOL_DIR"
-PYTHONPATH="$TOOL_DIR/src" python3 -m dotusage.cli collect | tail -8
+PYTHONPATH="$TOOL_DIR/src" "$PYTHON" -m dotusage.cli collect | tail -6
 
 cat <<'MSG'
 
@@ -78,9 +107,9 @@ cat <<'MSG'
 2) 在 Dot. App 的 Content Studio 里，给这台 Quote/0 加一个「Canvas API」内容项
    放进 loop 列表。卡片要有地方可写，Canvas API 才能落上去。
 
-做完这两步，跑一次就能同时刷墨水屏和飞书：
-       cd ~/Tools/dot-usage && python3 -m dot_usage.cli run
+做完这两步，跑一次就能同时刷墨水屏和本地状态：
+       python3.12 -m dotusage.cli run
 
-自检：  python3 -m dot_usage.cli doctor
-预览：  python3 -m dot_usage.cli preview && open preview/card-preview.html
+自检：  python3.12 -m dotusage.cli doctor
+预览：  python3.12 -m dotusage.cli preview && open preview/card-preview.html
 MSG

@@ -230,7 +230,7 @@ def cmd_check(args) -> int:
     try:
         from dotusage.util.device_check import capture_device_render
 
-        out = capture_device_render(wait=args.wait)
+        out = capture_device_render(wait=args.wait, device_id=cfg.get("device_id"))
         print(f"✓ 设备实渲染图（已转正）→ {out}")
     except Exception as e:  # noqa: BLE001
         print(f"· 抓渲染图失败：{e}")
@@ -410,7 +410,19 @@ def cmd_config(args) -> int:
     return 0
 
 
+def _check_python() -> None:
+    """Python 3.11 以下直接拦下来，别让它半死不活地跑。"""
+    if sys.version_info < (3, 11):
+        sys.stderr.write(
+            f"dot-usage 需要 Python 3.11+，当前是 {sys.version.split()[0]}"
+            f"（{sys.executable}）。\n"
+            "换 3.11+ 的解释器重跑，例如 python3.12 -m dotusage.cli ...\n"
+        )
+        raise SystemExit(2)
+
+
 def main(argv=None) -> int:
+    _check_python()
     p = argparse.ArgumentParser(prog="dot-usage", description="AI 用量 → 墨水屏 / 本地状态")
     sub = p.add_subparsers(dest="cmd", required=True)
 

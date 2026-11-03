@@ -1,7 +1,7 @@
 """自查：推一次卡片，下载设备真实渲染图，存成能直接看的 PNG。
 
 用法：
-    python3 -m dot_usage.cli check
+    python3 -m dotusage.cli check
 
 原理：
     DOT 服务端会把设备的当前渲染图挂在 CDN 上（status 接口的
@@ -18,18 +18,40 @@ import time
 import urllib.request
 from pathlib import Path
 
-from dotusage.util.config import dot_api_key
-from dotusage.sinks.dot import _dot_request
+from dotusage.util.config import dot_api_key, load_config
+from dotusage.sinks.dot import _dot_request, dot_devices
 
 OUT = Path.home() / "Tools" / "dot-usage" / "preview" / "device-actual.png"
 
 
-def capture_device_render(wait: float = 6.0, out: Path = OUT) -> Path:
+def resolve_device_id(key: str, configured: str | None = None) -> str:
+    """设备号：先看配置，再退到「列出设备」接口拿第一台。"""
+    did = (configured or load_config().get("device_id") or "").strip()
+    if did:
+        return did
+    try:
+        devs = dot_devices(key) or []
+    except Exception:  # noqa: BLE001
+        devs = []
+    for d in devs:
+        cand = str(d.get("id") or d.get("deviceId") or d.get("serialNumber") or "").strip()
+        if cand:
+            return cand
+    return ""
+
+
+def capture_device_render(
+    wait: float = 6.0,
+    out: Path = OUT,
+    device_id: str | None = None,
+) -> Path:
     """抓设备当前渲染图并转正保存。返回本地路径。"""
     key = dot_api_key()
     if not key:
         raise RuntimeError("没有 DOT_API_KEY")
-    cfg_did = ""
+    cfg_did = resolve_device_id(key, device_id)
+    if not cfg_did:
+        raise RuntimeError("找不到设备号：配置里 device_id 是空的，设备列表也是空的")
 
     time.sleep(wait)
     st = _dot_request("GET", f"/api/authV2/open/device/{cfg_did}/status", key)

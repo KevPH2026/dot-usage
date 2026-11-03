@@ -30,8 +30,9 @@ dependencies = []
 dot-usage = "dotusage.cli:main"
 
 [project.urls]
-Documentation = "https://github.com/dot-usage/dot-usage/blob/main/docs/DESIGN.md"
-Issues = "https://github.com/dot-usage/dot-usage/issues"
+Documentation = "https://github.com/KevPH2026/dot-usage/blob/main/docs/DESIGN.md"
+Issues = "https://github.com/KevPH2026/dot-usage/issues"
+Source = "https://github.com/KevPH2026/dot-usage"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 
 from ..core.schema import SourceReport, UsageRow
@@ -54,13 +55,24 @@ def user_config() -> Path:
 
 
 def _read_toml(path: Path) -> dict:
+    """读 TOML。读不了就大声报错——绝不能静默返回空配置。
+
+    静默失败过一次：解释器是 Python 3.9（没有 tomllib），
+    配置被读成空，采集还「成功」了，只是没有数据源。
+    """
     try:
         import tomllib
+    except ModuleNotFoundError as e:
+        raise RuntimeError(
+            "dot-usage 需要 Python 3.11+（数据源配置用标准库 tomllib 读）。"
+            f"当前解释器是 {sys.version.split()[0]}（{sys.executable}），换 3.11+ 的再跑。"
+        ) from e
 
+    try:
         with path.open("rb") as fh:
             return tomllib.load(fh)
-    except Exception:  # noqa: BLE001
-        return {}
+    except Exception as e:
+        raise RuntimeError(f"数据源配置读不了：{path}（{e}）") from e
 
 
 def _read_json(path: Path) -> dict:
