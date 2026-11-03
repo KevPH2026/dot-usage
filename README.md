@@ -50,10 +50,24 @@
 
 ## 快速开始
 
+**需要 Python 3.11+**（数据源配置用标准库 `tomllib` 读，3.9/3.10 没有它）、macOS 13+、零第三方依赖。
+
+### 一条命令装好（菜单栏 App + 每 15 分钟自动采集）
+
 ```bash
-# 1) 装（Python 3.11+，macOS 14+，零第三方依赖）
-git clone https://github.com/<你的账号>/dot-usage.git
-cd dot-usage && python3 -m pip install -e .
+git clone https://github.com/KevPH2026/dot-usage.git
+cd dot-usage
+bash install.sh
+```
+
+`install.sh` 会自动挑一个 3.11+ 的解释器、编译菜单栏 App、注册 LaunchAgent。
+它不碰你的 `~/Tools` 以外的东西，也不往设备上推任何东西。
+
+### 或者手动来
+
+```bash
+# 1) 装包（拿到 dot-usage 命令）
+python3 -m pip install -e .
 
 # 2) 自检：日志读到了没、密钥从哪来、浏览器在不在
 dot-usage doctor
@@ -62,7 +76,9 @@ dot-usage doctor
 dot-usage preview --out ~/dot-usage-preview.html
 ```
 
-不想装包：`PYTHONPATH=src python3 -m dotusage.cli collect`。
+> pip 装不上不用慌（Homebrew / Debian 的系统 Python 受 PEP 668 保护会拒绝 `pip install -e .`）。
+> 跳过这步，改用 `PYTHONPATH=src python3 -m dotusage.cli ...` 一样能跑，
+> `install.sh` 注册的定时任务也是走这条路径。
 
 推到设备上还需要两样东西：
 
