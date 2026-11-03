@@ -7,11 +7,21 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/open</string>
-        <string>-g</string>
-        <string>-a</string>
-        <string>__HOME__/Applications/DotUsageBar.app</string>
+        <string>__HOME__/Applications/DotUsageBar.app/Contents/MacOS/DotUsageBar</string>
     </array>
+
+    <!-- 直接跑二进制（不经 `open`），这样 App 的 stdout/stderr 会落到
+         menubar.out.log / menubar.err.log，出问题能直接看日志。
+         也因为是 launchd 直接启动，这里的 EnvironmentVariables 一定生效。 -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DOT_USAGE_PYTHON</key>
+        <string>__PYTHON__</string>
+        <key>DOT_USAGE_SRC_DIR</key>
+        <string>__SRC_DIR__</string>
+        <key>PATH</key>
+        <string>__HOME__/.pyenv/shims:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
 
     <key>RunAtLoad</key>
     <true/>

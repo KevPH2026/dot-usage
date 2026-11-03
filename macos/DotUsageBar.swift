@@ -126,6 +126,33 @@ enum IconStore {
     }
 }
 
+// MARK: - 安装配置
+
+/// install.sh 写的安装配置。
+///
+/// 为什么走文件不走环境变量：这个 App 是被 launchd 用 `open -g` 拉起来的，
+/// LaunchServices 给的进程环境是登录会话的环境，**不继承 LaunchAgent 的 EnvironmentVariables**。
+/// 想把「用哪个 python」「源码在哪」告诉它，只能落成一个文件。
+///
+/// 位置：~/Library/Application Support/DotUsageBar/config.json
+/// 内容：{"python": "/opt/homebrew/bin/python3.14", "src_dir": "/path/to/dot-usage/src"}
+enum InstallConfig {
+    static var path: String {
+        NSString(string: "~/Library/Application Support/DotUsageBar/config.json").expandingTildeInPath
+    }
+
+    static func load() -> [String: String] {
+        guard let data = FileManager.default.contents(atPath: path),
+              let obj = try? JSONSerialization.jsonObject(with: data),
+              let dict = obj as? [String: Any] else { return [:] }
+        var out: [String: String] = [:]
+        for (k, v) in dict {
+            if let s = v as? String, !s.isEmpty { out[k] = s }
+        }
+        return out
+    }
+}
+
 // MARK: - 采集器调用
 
 /// 跑采集命令（`python3 -m dotusage.cli collect`）。
@@ -134,51 +161,74 @@ enum IconStore {
 /// 先找一个能 `import dotusage` 的 python，找不到再退到
 /// 环境变量 DOT_USAGE_SRC_DIR 指定的目录（源码方式跑）。
 enum Collector {
-    static let pythonCandidates = [
-        "/opt/homebrew/bin/python3",
-        "/usr/local/bin/python3",
-        "/usr/bin/python3",
-        "/usr/bin/env",
+    /// 候选解释器。带 prefixArgs 的是「用 env 去 PATH 里找」。
+    struct Candidate {
+        let executable: String
+        let prefixArgs: [String]
+        init(_ executable: String, _ prefixArgs: [String] = []) {
+            self.executable = executable
+            self.prefixArgs = prefixArgs
+        }
+    }
+
+    static let pythonCandidates: [Candidate] = [
+        Candidate("/opt/homebrew/bin/python3"),
+        Candidate("/usr/local/bin/python3"),
+        Candidate("/usr/bin/env", ["python3"]),   // 按 PATH 找，能命中 pyenv / conda 之类
+        Candidate(NSString(string: "~/.pyenv/shims/python3").expandingTildeInPath),
+        Candidate("/usr/bin/python3"),             // 系统自带的 3.9，多半不合格，放最后
     ]
 
     /// 找到的可用解释器 + 它需要的环境变量
     struct Resolved {
         let python: String
+        let prefixArgs: [String]
         let env: [String: String]
     }
 
     static func resolve() -> Resolved? {
         let base = ProcessInfo.processInfo.environment
+        let install = InstallConfig.load()
         var candidates = pythonCandidates
-        if let p = base["DOT_USAGE_PYTHON"], !p.isEmpty { candidates.insert(p, at: 0) }
+        // 环境变量优先，其次 install.sh 写下来的配置
+        let wantedPython = base["DOT_USAGE_PYTHON"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? install["python"]
+        if let p = wantedPython {
+            candidates.insert(Candidate(p), at: 0)
+        }
 
-        // 1) 已安装的包：python -c "import dotusage" 能过
-        for py in candidates {
-            guard FileManager.default.isExecutableFile(atPath: py) || py.hasSuffix("/env") else { continue }
-            if canImport(py, env: base) {
-                return Resolved(python: py, env: base)
+        // 1) 已安装的包：python -c "import dotusage" 能过，且版本够新
+        for c in candidates {
+            if canRun(c, env: base) {
+                return Resolved(python: c.executable, prefixArgs: c.prefixArgs, env: base)
             }
         }
 
-        // 2) 兜底：源码目录（只有显式设了 DOT_USAGE_SRC_DIR 才用）
-        if let src = base["DOT_USAGE_SRC_DIR"], !src.isEmpty {
+        // 2) 兜底：源码目录（DOT_USAGE_SRC_DIR 或 install.sh 写的 src_dir）
+        let src = base["DOT_USAGE_SRC_DIR"].flatMap { $0.isEmpty ? nil : $0 } ?? install["src_dir"]
+        if let src {
             var env = base
             let existing = env["PYTHONPATH"].map { $0 + ":" } ?? ""
             env["PYTHONPATH"] = existing + src
-            for py in candidates {
-                guard FileManager.default.isExecutableFile(atPath: py) else { continue }
-                if canImport(py, env: env) {
-                    return Resolved(python: py, env: env)
+            for c in candidates {
+                if canRun(c, env: env) {
+                    return Resolved(python: c.executable, prefixArgs: c.prefixArgs, env: env)
                 }
             }
         }
         return nil
     }
 
-    private static func canImport(_ python: String, env: [String: String]) -> Bool {
+    /// 这个解释器能不能用：能 import dotusage，且 Python ≥ 3.11
+    /// （3.11 才有标准库 tomllib，读不了数据源配置）。
+    private static func canRun(_ c: Candidate, env: [String: String]) -> Bool {
+        if c.prefixArgs.isEmpty {
+            guard FileManager.default.isExecutableFile(atPath: c.executable) else { return false }
+        }
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: python)
-        p.arguments = ["-c", "import dotusage"]
+        p.executableURL = URL(fileURLWithPath: c.executable)
+        p.arguments = c.prefixArgs
+            + ["-c", "import sys, dotusage; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"]
         p.environment = env
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
@@ -194,11 +244,11 @@ enum Collector {
     /// 跑一次采集。返回 (退出码, 输出)
     static func collect() -> (status: Int32, output: String) {
         guard let r = resolve() else {
-            return (-1, "找不到能 import dotusage 的 python。装一下：pip install -e <dot-usage 目录>")
+            return (-1, "找不到能 import dotusage 的 Python 3.11+。装一下：pip install -e <仓库目录>；或设 DOT_USAGE_PYTHON / DOT_USAGE_SRC_DIR")
         }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: r.python)
-        proc.arguments = ["-m", "dotusage.cli", "collect"]
+        proc.arguments = r.prefixArgs + ["-m", "dotusage.cli", "collect"]
         proc.environment = r.env
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -274,6 +324,12 @@ final class AppModel: ObservableObject {
         if status != 0 {
             lastError = out.split(separator: "\n").last.map(String.init) ?? "采集失败"
         }
+        // 落一行日志到 stderr：launchd 把 App 的 stderr 收进 menubar.err.log，
+        // 出问题时不用猜到底是哪一步炸的。
+        FileHandle.standardError.write(
+            "dot-usage: collect status=\(status) \(out.split(separator: "\n").last.map(String.init) ?? "")\n"
+                .data(using: .utf8)!
+        )
         load()
         busy = false
         onChange?()
@@ -559,6 +615,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 自动刷新：15 分钟一次，和定时采集的节奏一致（两者互不依赖）
         timer = Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { [weak self] _ in
             DispatchQueue.main.async { self?.model.refresh(silent: true) }
+        }
+
+        // 启动后先静默采一次：菜单栏里显示的应该是当下的数据，
+        // 而不是最多 15 分钟前的 state.json。放到后台线程，别卡住界面。
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
+            DispatchQueue.main.async { self.model.refresh(silent: true) }
         }
 
         updateStatusTitle()

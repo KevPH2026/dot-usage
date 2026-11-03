@@ -269,3 +269,5 @@ core 和 cards 都不知道 sink 的存在 —— 这是分层的意义。
 | 菜单栏 App 的兜底路径写死家目录 | `macos/DotUsageBar.swift` 里 `~/Tools/dot-usage/icons/png` 和 `~/Tools/dot-usage/preview/card-preview.html` 是最后兜底，装到别处时靠前两层（环境变量 / 包内） |
 | **Python 必须 3.11+** | 数据源配置用标准库 `tomllib` 读，3.9/3.10 没有它。踩过的坑：解释器是 `/usr/bin/python3`（3.9）时，配置被静默读成空，采集还「成功」，只是没数据源。现在 `sources/loader.py` 读不到 `tomllib` 直接报错退出，`cli.py` 入口也会拦一道；`install.sh` 自动挑 3.11+ 的解释器并写进 `launchd/*.plist`（`__PYTHON__` 占位） |
 | 命令行入口有两个 | `python -m dotusage …`（有 `__main__.py`）、`python -m dotusage.cli …`、以及装完后的 `dot-usage` 命令，三种都能用 |
+| 菜单栏 App 的解释器靠文件传参 | 这个 App 由 launchd **直接跑二进制**（不经 `open`），所以 `EnvironmentVariables` 生效；同时 `install.sh` 还写一份 `~/Library/Application Support/DotUsageBar/config.json`（`python` + `src_dir`）作为兜底——手动从 Finder 打开时走的是 LaunchServices，拿不到 launchd 的环境变量 |
+| 菜单栏 App 的候选解释器有上限 | `macos/DotUsageBar.swift` 里 `Collector.pythonCandidates` 依次试：`DOT_USAGE_PYTHON` / 安装配置里的 python → homebrew → `/usr/local` → `env python3`（按 PATH 找，能命中 pyenv/conda）→ `~/.pyenv/shims/python3` → 系统 3.9。每个候选都要**既能 import dotusage 又 ≥ 3.11** 才算数 |
