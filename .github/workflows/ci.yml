@@ -3,12 +3,17 @@ on:
   push:
     branches: [main]
   pull_request:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
-    runs-on: macos-latest
+  # Python 侧：语法、导入、数据源配置自检。放 ubuntu 是因为 runner 队列快，几秒出结果。
+  python:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: 语法与导入检查
@@ -18,3 +23,15 @@ jobs:
       - name: 数据源配置自检
         run: |
           PYTHONPATH=src python3 -m dotusage.cli sources
+
+  # 菜单栏 App：macOS 专属（AppKit），只能在 macOS runner 上编译。
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: 编译 DotUsageBar
+        run: |
+          cd macos
+          mkdir -p build
+          swiftc -O -parse-as-library -target arm64-apple-macos13.0 DotUsageBar.swift -o build/DotUsageBar
+          test -x build/DotUsageBar

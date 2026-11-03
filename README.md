@@ -1,5 +1,8 @@
 # dot-usage
 
+[![CI](https://github.com/KevPH2026/dot-usage/actions/workflows/ci.yml/badge.svg)](https://github.com/KevPH2026/dot-usage/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 > **Your AI coding quota, burning down in real time — on a 296×152 e-ink screen.**
 
 把 Codex、Claude Code、MiniMax、OpenCode、Hermes、z.ai 的**配额消耗**和 **token 账单**汇成 7 张卡，推到 DOT 电子墨水屏上，再配一个 macOS 菜单栏面板随时点开看。给同时开着好几个 AI 编程工具、月底才发现额度烧穿的人用。
