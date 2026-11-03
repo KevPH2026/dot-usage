@@ -1,0 +1,75 @@
+# dot-usage 数据源配置模板
+#
+# 装成你自己的配置：
+#     cp examples/sources.toml ~/.config/dot-usage/sources.toml
+#
+# 生效规则：包内的默认配置 + 这个文件，按 id 合并（同 id 以这里为准）。
+# 所以这里只需要写「你自己的工具」，内置的那几个不用重复写。
+# 改完跑 `python3 -m dotusage.cli sources` 看效果。
+
+# ── 输出目标（sink）开关 ───────────────────────────────────────────
+# local = 写本地状态文件 state.json（菜单栏 App 读它，一般别关）
+[sink.local]
+enabled = true
+
+# dot = 推墨水屏设备
+[sink.dot]
+enabled = true
+
+# ── 加一个自己的工具：通用 SQLite 适配器 ──────────────────────────
+# 绝大多数 CLI 工具的用量都记在 SQLite 里，只要知道表名和字段名就行。
+#
+# [[source]]
+# id = "mytool"
+# name = "MyTool"
+# platform = "自家"          # 归到哪个平台（卡片按平台合并成一行）
+# icon = "chatgpt"            # icons/png/<icon>.png
+# adapter = "sqlite_usage"
+#
+# [source.options]
+# db = "~/.mytool/data.db"    # 支持 ~ 和环境变量
+# sql = """
+#     SELECT model AS model, ts AS ts,
+#            input_tokens AS input, output_tokens AS output,
+#            total_tokens AS total, cost_usd AS cost
+#     FROM usage
+#     WHERE ts > :since
+# """
+# time_scale = 0.001          # 时间戳是毫秒就填 0.001，秒就填 1
+# window_hours = 24           # 只看最近多少小时
+
+# ── 加一个自己的工具：通用 JSONL 适配器 ───────────────────────────
+# 每次会话一个 JSON 文件的日志（每行一个 JSON）也能接。
+#
+# [[source]]
+# id = "mytool2"
+# name = "MyTool2"
+# platform = "自家"
+# icon = "chatgpt"
+# adapter = "jsonl_usage"
+#
+# [source.options]
+# glob = "~/.mytool2/sessions/**/*.jsonl"
+# model = "message.model"
+# input = "message.usage.input_tokens"
+# output = "message.usage.output_tokens"
+# ts = "timestamp"
+
+# ── 内置源长什么样（参考，不必重复写）─────────────────────────────
+#
+# [[source]]
+# id = "codex"
+# name = "Codex"
+# platform = "ChatGPT"
+# icon = "chatgpt"
+# adapter = "builtin"          # 内置采集器
+# builtin = "codex"
+# official = "chatgpt"          # 顺带跑官方配额 provider
+#
+# [[source]]
+# id = "grok"
+# name = "Grok"
+# platform = "Grok"
+# icon = "grok"
+# adapter = "official"         # 只有官方配额，没有本地用量
+# official = "grok"

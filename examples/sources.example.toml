@@ -1,0 +1,56 @@
+# dot-usage 数据源配置示例（最小可用版）
+#
+# 放到：~/.config/dot-usage/sources.toml
+# 改完跑：python3 -m dotusage.cli collect    # 看每个源读到几行
+#
+# 完整字段表和调试方法见 docs/SOURCES.md。
+# 更多例子见 examples/sources.generic.example.toml。
+
+# ── 例子 1：用量记在 SQLite 里的工具 ────────────────────────────────
+# 适配器 sqlite_usage：一条 SQL + 一份字段别名。
+#
+# SQL 里能用的绑定参数只有一个：:since（窗口起点的秒级时间戳）。
+# 你自己的表用毫秒存时间，就在 SQL 里写 :since * 1000 换算一下。
+# 返回列用 AS 改名成适配器认识的字段名：
+#   model / input / output / reasoning / cache_read / cache_write / total / calls / ts / cost
+# 不写 total 就由 input+output+cache_read+cache_write 自动算。
+[[source]]
+id = "mytool"
+name = "MyTool"
+platform = "自家"
+icon = "chatgpt"          # 对应 icons/png/<name>.png，缺失就不显示图标
+adapter = "sqlite_usage"
+
+[source.options]
+db = "~/.mytool/data.db"
+sql = """
+    SELECT model            AS model,
+           ts               AS ts,
+           input_tokens     AS input,
+           output_tokens    AS output,
+           total_tokens     AS total,
+           cost_usd         AS cost
+    FROM usage
+    WHERE ts > :since
+"""
+time_scale = 0.001        # 取出来的时间戳单位换算（毫秒 → 秒填 0.001）
+window_hours = 24         # 只看最近 24 小时；填 0 表示全部历史
+
+# ── 例子 2：每行一个 JSON 的会话日志（Claude Code 就是这种）────────────
+# 适配器 jsonl_usage：字段用点号路径，数组用 a.0.b。
+# 时间字段给 ISO 字符串（2026-10-29T08:03:04.862Z）或秒/毫秒时间戳都行。
+[[source]]
+id = "mytool2"
+name = "MyTool2"
+platform = "自家"
+adapter = "jsonl_usage"
+
+[source.options]
+glob = "~/.mytool2/sessions/**/*.jsonl"
+model = "message.model"
+input = "message.usage.input_tokens"
+output = "message.usage.output_tokens"
+cache_read = "message.usage.cache_read_input_tokens"
+cache_write = "message.usage.cache_creation_input_tokens"
+ts = "timestamp"
+window_hours = 24

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dot-usage"
+version = "1.0.0"
+description = "本地 AI 编程工具配额看板：把各平台的配额消耗与 token 账单汇成 7 张卡，推到 DOT 电子墨水屏。"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "dot-usage contributors" }]
+keywords = ["ai", "quota", "usage", "tokens", "eink", "dot", "dashboard"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: MacOS :: MacOS X",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Utilities",
+]
+
+# 零第三方依赖：只用标准库（tomllib / sqlite3 / urllib）。
+# HTML → PNG 走本机 Chrome headless，不引入渲染库。
+dependencies = []
+
+[project.scripts]
+dot-usage = "dotusage.cli:main"
+
+[project.urls]
+Documentation = "https://github.com/dot-usage/dot-usage/blob/main/docs/DESIGN.md"
+Issues = "https://github.com/dot-usage/dot-usage/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# 内置源配置要跟着包一起装，否则 load_config() 找不到 defaults.toml。
+[tool.setuptools.package-data]
+dotusage = ["sources/*.toml"]

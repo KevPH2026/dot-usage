@@ -1,0 +1,231 @@
+# dot-usage 数据源配置示例（通用适配器版）
+#
+# 把作者本机上的 8 个工具，全部用「通用适配器」表达一遍：
+#   sqlite_usage  → 用量在 SQLite 表里，写一条 SQL
+#   jsonl_usage   → 用量在每行一个 JSON 的日志里，写一份字段路径
+#   official      → 配额只能问平台官方接口，点名一个官方 provider
+#
+# 放到：~/.config/dot-usage/sources.toml
+# 改完跑：python3 -m dotusage.cli collect   # 看每个源读到几行
+#
+# 字段表和调试方法见 docs/SOURCES.md。
+
+# ══════════════════════════════════════════════════════════════════
+# 1) Codex (OpenAI) —— 用量在 rollout JSONL 里
+# ══════════════════════════════════════════════════════════════════
+# 一行长这样（只看结构，不看内容）：
+#   {"type":"event_msg","timestamp":"2026-11-02T03:45:16.753Z",
+#    "payload":{"type":"token_count",
+#      "info":{"total_token_usage":{"input_tokens":123,"output_tokens":45,
+#                 "reasoning_output_tokens":0,"cached_input_tokens":10,
+#                 "cache_write_input_tokens":0,"total_tokens":178}}}}}
+# 模型名在另一种行里（turn_context → payload.model），所以给个兜底名。
+#
+# ⚠️ 已知限制：通用 jsonl_usage 适配器只扫「行内含 "usage" 或 "tokens" 字样」的日志，
+#    而 Codex 把用量放在 total_token_usage 里，行内不含这两个词，所以通用适配器读不到它。
+#    Codex 请用内置的专用适配器（见下方注释掉的写法）。
+[[source]]
+id = "codex"
+name = "Codex"
+platform = "ChatGPT"
+icon = "chatgpt"
+adapter = "jsonl_usage"
+
+[source.options]
+glob = "~/.codex/sessions/**/*.jsonl"
+model = "payload.model"
+input = "payload.info.total_token_usage.input_tokens"
+output = "payload.info.total_token_usage.output_tokens"
+reasoning = "payload.info.total_token_usage.reasoning_output_tokens"
+cache_read = "payload.info.total_token_usage.cached_input_tokens"
+cache_write = "payload.info.total_token_usage.cache_write_input_tokens"
+total = "payload.info.total_token_usage.total_tokens"
+ts = "timestamp"
+fallback_model = "codex"
+window_hours = 24
+
+# Codex 的正确接法（内置专用适配器，能读懂 rollout 的累计口径）：
+# [[source]]
+# id = "codex"
+# name = "Codex"
+# platform = "ChatGPT"
+# icon = "chatgpt"
+# adapter = "builtin"
+# builtin = "codex"
+# official = "chatgpt"        # 配额走 ChatGPT 官方接口，官方口径优先
+
+# ══════════════════════════════════════════════════════════════════
+# 2) ZCode / z.ai (GLM) —— 用量在 SQLite 的 model_usage 表
+# ══════════════════════════════════════════════════════════════════
+# 时间戳是毫秒，所以 SQL 里用 :since * 1000 换算成秒再比。
+# time_scale 只负责把取出来的时间换算回秒（毫秒 → 秒填 0.001）。
+[[source]]
+id = "zcode"
+name = "ZCode"
+platform = "Z.ai"
+icon = "zai"
+adapter = "sqlite_usage"
+
+[source.options]
+db = "~/.zcode/cli/db/db.sqlite"
+sql = """
+    SELECT model_id                          AS model,
+           MAX(started_at)                   AS ts,
+           SUM(input_tokens)                 AS input,
+           SUM(output_tokens)                AS output,
+           SUM(reasoning_tokens)             AS reasoning,
+           SUM(cache_read_input_tokens)      AS cache_read,
+           SUM(cache_creation_input_tokens)  AS cache_write,
+           SUM(computed_total_tokens)        AS total,
+           COUNT(*)                          AS calls
+    FROM model_usage
+    WHERE started_at > :since * 1000
+    GROUP BY model_id
+"""
+time_scale = 0.001
+window_hours = 24
+
+# ══════════════════════════════════════════════════════════════════
+# 3) MiniMax Code —— 用量在 SQLite 的 token_usage 表
+# ══════════════════════════════════════════════════════════════════
+# 这张表连花费都有：cost_usd。
+[[source]]
+id = "minimax"
+name = "MiniMax Code"
+platform = "MiniMax"
+icon = "minimax"
+adapter = "sqlite_usage"
+
+[source.options]
+db = "~/.minimax/sqlite.db"
+sql = """
+    SELECT model              AS model,
+           MAX(ts)            AS ts,
+           SUM(input_tokens)  AS input,
+           SUM(output_tokens) AS output,
+           SUM(reasoning_tokens)   AS reasoning,
+           SUM(cache_read_tokens)  AS cache_read,
+           SUM(cache_write_tokens) AS cache_write,
+           SUM(cost_usd)      AS cost,
+           COUNT(*)           AS calls
+    FROM token_usage
+    WHERE ts > :since * 1000
+    GROUP BY model
+"""
+time_scale = 0.001
+window_hours = 24
+
+# ══════════════════════════════════════════════════════════════════
+# 4) Claude Code —— 用量在每行一个 JSON 的会话日志里
+# ══════════════════════════════════════════════════════════════════
+# 一行长这样：
+#   {"type":"assistant","timestamp":"2026-10-02T05:53:59.122Z",
+#    "message":{"model":"claude-...","usage":{"input_tokens":12,
+#      "output_tokens":34,"cache_read_input_tokens":0,
+#      "cache_creation_input_tokens":0}}}
+[[source]]
+id = "claude"
+name = "Claude Code"
+platform = "Claude"
+icon = "chatgpt"
+adapter = "jsonl_usage"
+
+[source.options]
+glob = "~/.claude/projects/**/*.jsonl"
+model = "message.model"
+input = "message.usage.input_tokens"
+output = "message.usage.output_tokens"
+cache_read = "message.usage.cache_read_input_tokens"
+cache_write = "message.usage.cache_creation_input_tokens"
+ts = "timestamp"
+window_hours = 24
+
+# ══════════════════════════════════════════════════════════════════
+# 5) OpenCode —— 用量在 SQLite 的 session 表（会话级累计）
+# ══════════════════════════════════════════════════════════════════
+[[source]]
+id = "opencode"
+name = "OpenCode"
+platform = "OpenCode"
+icon = "opencode"
+adapter = "sqlite_usage"
+
+[source.options]
+db = "~/.local/share/opencode/opencode.db"
+sql = """
+    SELECT model                  AS model,
+           MAX(time_created)      AS ts,
+           SUM(tokens_input)      AS input,
+           SUM(tokens_output)     AS output,
+           SUM(tokens_reasoning)  AS reasoning,
+           SUM(tokens_cache_read)  AS cache_read,
+           SUM(tokens_cache_write) AS cache_write,
+           SUM(cost)              AS cost,
+           COUNT(*)               AS calls
+    FROM session
+    WHERE time_created > :since * 1000
+    GROUP BY model
+"""
+time_scale = 0.001
+window_hours = 24
+fallback_model = "opencode"   # session.model 可能是空的，给个兜底名
+
+# ══════════════════════════════════════════════════════════════════
+# 6) Hermes —— 用量在 SQLite 的 session_model_usage 表
+# ══════════════════════════════════════════════════════════════════
+# 这张表的时间是秒（浮点），所以 time_scale 保持 1，SQL 也不用换算。
+[[source]]
+id = "hermes"
+name = "Hermes"
+platform = "Hermes"
+icon = "hermes"
+adapter = "sqlite_usage"
+
+[source.options]
+db = "~/.hermes/state.db"
+sql = """
+    SELECT model                  AS model,
+           MAX(first_seen)        AS ts,
+           SUM(input_tokens)      AS input,
+           SUM(output_tokens)     AS output,
+           SUM(reasoning_tokens)  AS reasoning,
+           SUM(cache_read_tokens) AS cache_read,
+           SUM(cache_write_tokens) AS cache_write,
+           SUM(estimated_cost_usd) AS cost,
+           COUNT(*)               AS calls
+    FROM session_model_usage
+    WHERE first_seen > :since
+    GROUP BY model
+"""
+time_scale = 1
+window_hours = 24
+
+# ══════════════════════════════════════════════════════════════════
+# 7) Grok / xAI —— 官方只给订阅档位，没有配额百分比
+# ══════════════════════════════════════════════════════════════════
+# adapter = "official" 的源不跑通用采集器，只点名一个官方 provider，
+# 由统一入口跑一遍（避免同一批行出两遍）。
+# grok provider 会拿订阅档位 + 本地花费；它需要 xAI 的 token（见 docs/SOURCES.md）。
+[[source]]
+id = "grok"
+name = "Grok"
+platform = "Grok"
+icon = "grok"
+adapter = "official"
+official = "grok"
+
+# ══════════════════════════════════════════════════════════════════
+# 8) DeepSeek —— 官方只给余额
+# ══════════════════════════════════════════════════════════════════
+[[source]]
+id = "deepseek"
+name = "DeepSeek"
+platform = "DeepSeek"
+icon = "deepseek"
+adapter = "official"
+official = "deepseek"
+
+# ──────────────────────────────────────────────────────────────────
+# 想加自己的工具：复制上面任意一段，改 id / platform / options 就行，
+# 不用改一行 Python。字段表见 docs/SOURCES.md。
+# ──────────────────────────────────────────────────────────────────

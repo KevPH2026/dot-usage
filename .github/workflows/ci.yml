@@ -1,0 +1,20 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 语法与导入检查
+        run: |
+          python3 -m compileall -q src
+          PYTHONPATH=src python3 -c "import dotusage.cli"
+      - name: 数据源配置自检
+        run: |
+          PYTHONPATH=src python3 -m dotusage.cli sources

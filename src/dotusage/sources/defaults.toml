@@ -1,0 +1,131 @@
+# dot-usage 默认数据源
+#
+# 每个 [[source]] 描述一个工具：去哪儿读、算它属于哪个平台。
+# 想加自己的工具 → 复制一段改改 → docs/SOURCES.md
+# 改完跑 `python -m dotusage sources` 看效果。
+
+# ── ChatGPT / Codex ────────────────────────────────────────────────
+[[source]]
+id = "codex"
+name = "Codex"
+platform = "ChatGPT"
+icon = "chatgpt"
+adapter = "builtin"
+builtin = "codex"
+official = "chatgpt"
+
+# ── Z.ai / GLM Coding Plan（通过 ZCode）────────────────────────────
+[[source]]
+id = "zcode"
+name = "ZCode"
+platform = "Z.ai"
+icon = "zai"
+adapter = "builtin"
+builtin = "zcode"
+official = "zai"
+
+# ── MiniMax ───────────────────────────────────────────────────────
+[[source]]
+id = "minimax"
+name = "MiniMax Code"
+platform = "MiniMax"
+icon = "minimax"
+adapter = "builtin"
+builtin = "minimax"
+official = "minimax"
+
+# ── Claude Code ───────────────────────────────────────────────────
+[[source]]
+id = "claude"
+name = "Claude Code"
+platform = "Claude"
+icon = "chatgpt"
+adapter = "builtin"
+builtin = "claude"
+
+# ── OpenCode ──────────────────────────────────────────────────────
+[[source]]
+id = "opencode"
+name = "OpenCode"
+platform = "OpenCode"
+icon = "opencode"
+adapter = "builtin"
+builtin = "opencode"
+
+# ── Hermes（跨 provider 的账本）──────────────────────────────────
+[[source]]
+id = "hermes"
+name = "Hermes"
+platform = "Hermes"
+icon = "hermes"
+adapter = "builtin"
+builtin = "hermes"
+
+# ── Grok / xAI ────────────────────────────────────────────────────
+[[source]]
+id = "grok"
+name = "Grok"
+platform = "Grok"
+icon = "grok"
+adapter = "official"
+official = "grok"
+
+# ── DeepSeek（只有余额，没有用量）─────────────────────────────────
+[[source]]
+id = "deepseek"
+name = "DeepSeek"
+platform = "DeepSeek"
+icon = "deepseek"
+adapter = "official"
+official = "deepseek"
+
+# ══════════════════════════════════════════════════════════════════
+# 下面是「通用适配器」的例子 —— 不改 Python 代码就能接新的工具。
+# 把 adapter 改成 sqlite_usage / jsonl_usage 即可。
+# ══════════════════════════════════════════════════════════════════
+
+# [[source]]
+# id = "mytool"
+# name = "MyTool"
+# platform = "自家"
+# icon = "chatgpt"
+# adapter = "sqlite_usage"
+#
+# [source.options]
+# db = "~/.mytool/data.db"
+# sql = """
+#     SELECT model AS model, ts AS ts,
+#            input_tokens AS input, output_tokens AS output,
+#            total_tokens AS total, cost_usd AS cost
+#     FROM usage
+#     WHERE ts > :since
+# """
+# time_scale = 0.001
+# window_hours = 24
+
+# [[source]]
+# id = "mytool2"
+# name = "MyTool2"
+# platform = "自家"
+# adapter = "jsonl_usage"
+#
+# [source.options]
+# glob = "~/.mytool2/sessions/**/*.jsonl"
+# model = "message.model"
+# input = "message.usage.input_tokens"
+# output = "message.usage.output_tokens"
+# ts = "timestamp"
+
+# ══════════════════════════════════════════════════════════════════
+# 输出目标（sink）开关
+# 加新的输出目标只要往这里加一段 [sink.<名字>]，
+# 核心采集代码不用动。
+# ══════════════════════════════════════════════════════════════════
+
+# local = 写本地状态文件 state.json（桌面端读它）
+[sink.local]
+enabled = true
+
+# dot = 推墨水屏设备
+[sink.dot]
+enabled = true
