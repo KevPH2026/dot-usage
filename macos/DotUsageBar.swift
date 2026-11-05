@@ -619,8 +619,14 @@ struct CumulativeChartView: View {
     var color: Color = Color(red: 0.20, green: 0.45, blue: 0.95)
     /// 0→1 的显示进度
     var reveal: CGFloat = 1
+    /// 刻度/端点怎么写：token 还是金额
+    var isMoney: Bool = false
 
     private var maxValue: Double { max(values.max() ?? 1, 0.0001) }
+
+    private func axisLabel(_ v: Double) -> String {
+        isMoney ? "¥\(compactMoney(v))" : compactTokens(Int(v))
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -658,7 +664,7 @@ struct CumulativeChartView: View {
                             .opacity(Double(reveal))
                     }
                 }
-                Text("¥\(compactMoney(maxValue))")
+                Text(axisLabel(maxValue))
                     .font(.system(size: 8))
                     .foregroundStyle(.secondary)
                     .padding(.leading, 2)
@@ -675,6 +681,20 @@ struct TrendPanelView: View {
     /// 动画进度（0→1）
     var reveal: CGFloat = 1
 
+    /// 累计 token 曲线（每天的量跑累加）
+    private var cumulativeTokensCurve: [Double] {
+        runningSum((daily?.by_day ?? []).map { Double($0) })
+    }
+
+    private var cumulativeTokens: Double {
+        cumulativeTokensCurve.last ?? 0
+    }
+
+    /// 累计等效成本（同口径：30 天）
+    private var cumulativeCost: Double {
+        runningSum(daily?.by_day_cost ?? []).last ?? 0
+    }
+
     var body: some View {
         let days = daily?.days ?? []
         let series = daily?.series ?? []
@@ -684,13 +704,25 @@ struct TrendPanelView: View {
                 .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                // 累计折算成本
+                // 累计 token（大数字）· 等效成本放次要位置
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("累计等效成本")
+                    Text("累计 token")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
-                    Text("¥\(compactMoney(cost?.total_cumulative))")
+                    Text(compactTokens(Int(cumulativeTokens)))
                         .font(.system(size: 17, weight: .bold))
+                        .monospacedDigit()
+                    Spacer()
+                    Text("近\(days.count)天")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text("等效成本")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                    Text("¥\(compactMoney(cumulativeCost))")
+                        .font(.system(size: 11, weight: .semibold))
                         .monospacedDigit()
                     if cost?.estimated == true {
                         Text("按 API 单价折算")
@@ -698,9 +730,6 @@ struct TrendPanelView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text("近\(days.count)天")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
                 }
 
                 // 每日消耗
@@ -711,21 +740,20 @@ struct TrendPanelView: View {
                     TrendChartView(days: days, series: series, height: 78, reveal: reveal)
                 }
 
-                // 累计成本曲线（by_day_cost 是每天的，这里跑累加）
-                let cumulative = runningSum(daily?.by_day_cost ?? [])
+                // 累计 token 曲线（by_day 是每天的，这里跑累加）
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
-                        Text("累计成本（近\(days.count)天）")
+                        Text("累计 token")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Text("¥\(compactMoney(cumulative.last ?? 0))")
+                        Text(compactTokens(Int(cumulativeTokens)))
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
                     CumulativeChartView(
-                        values: cumulative,
+                        values: cumulativeTokensCurve,
                         height: 46,
                         reveal: reveal
                     )
@@ -906,6 +934,7 @@ struct PanelView: View {
                 .onAppear { model.startChartAnimation() }
             } else {
                 let models = model.state?.models ?? []
+                let totalTokens = models.reduce(0) { $0 + (Int($1.total_tokens ?? 0)) }
                 if !models.isEmpty {
                     ForEach(models.prefix(maxModelRows)) {
                         ModelRowView(item: $0, windowLabel: model.state?.windowLabel ?? "今天")
@@ -916,11 +945,23 @@ struct PanelView: View {
                             .foregroundStyle(.secondary)
                             .padding(.top, 2)
                     }
-                    // 累计折算成本（模型面板底部也带一份，方便直接看）
+                    // 全部历史的累计（模型面板底部带一份，方便直接看）
                     if let c = model.state?.cost?.total_cumulative, c > 0 {
                         Divider().padding(.vertical, 4)
                         HStack(spacing: 6) {
-                            Text("累计等效成本")
+                            Text("全部历史累计")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                            Text(compactTokens(totalTokens))
+                                .font(.system(size: 12, weight: .semibold))
+                                .monospacedDigit()
+                            Text("token")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                        HStack(spacing: 6) {
+                            Text("等效成本")
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
                             Text("¥\(compactMoney(c))")
