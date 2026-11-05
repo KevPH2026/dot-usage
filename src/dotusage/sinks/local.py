@@ -28,6 +28,7 @@ def build_state(rows, reports=None, models=None, pulse=None, projects=None) -> d
     - version        契约版本号
     - generated_at   采集时间（ISO8601）
     - icon_dir       图标目录的绝对路径（桌面端找图标用）
+    - window         消耗数据的统计窗口标签（近24h / 近7天 / …）
     - platforms      按平台合并后的一行一平台
     - models         按模型维度
     - pulse          近 48 小时的消耗节奏
@@ -37,11 +38,22 @@ def build_state(rows, reports=None, models=None, pulse=None, projects=None) -> d
     """
     from ..core.aggregate import aggregate
 
+    # 消耗行的窗口标签。桌面端要显示「近24h」还是「近7天」，
+    # 靠这个字段——不然它只能写死「今天」，窗口一改就说谎了。
+    wins = {
+        str(getattr(r, "window", "") or "")
+        for r in (rows or [])
+        if getattr(r, "kind", "") == "consumption" and (getattr(r, "total_tokens", 0) or 0) > 0
+    }
+    wins.discard("")
+    window = next(iter(wins)) if len(wins) == 1 else ""
+
     return {
         "version": STATE_VERSION,
         "generated_at": iso(now_ts()),
         "generated_at_epoch": now_ts(),
         "icon_dir": cfgmod.icon_dir(),
+        "window": window,
         "platforms": [r.to_dict() for r in aggregate(rows)],
         "models": list(models or []),
         "pulse": pulse or {},

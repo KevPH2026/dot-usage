@@ -179,8 +179,9 @@ python3 -m dotusage.cli switch
 | `generated_at` | string | 采集时间（ISO8601） |
 | `generated_at_epoch` | float | 同一时间的秒级时间戳 |
 | `icon_dir` | string | 图标目录的绝对路径，桌面端找图标用 |
+| `window` | string | 消耗数据的统计窗口标签（近24h / 近7天 / …）。各源窗口不一致时为空串 |
 | `platforms` | list | 按平台合并后的一行一平台。**卡片和菜单栏用这个** |
-| `models` | list | 按模型维度：今日 + 历史累计 |
+| `models` | list | 按模型维度：窗口内（默认近 24h）+ 历史累计 |
 | `pulse` | object | 近 48 小时的消耗节奏（按小时） |
 | `projects` | object | 按工作目录拆的账 |
 | `sources` | list | 每个源的状态：读到几行、报了什么错 |
@@ -190,6 +191,11 @@ python3 -m dotusage.cli switch
 `rows` 是原始明细，加字段不影响它；
 `sources` 是自检段，`doctor` 靠它报错；
 `version` 是版本号，字段有 breaking 变化时必须 +1。
+
+> `window` 是为了治「数字对不上」加的：统计窗口现在每个源都能单独配
+> （见 [SOURCES.md](SOURCES.md#optionsbuiltin--official)），
+> 桌面端和卡片都得知道当前是哪个窗口，不能写死「今天」——
+> 窗口一改还写「今天」就是在说谎。
 
 状态是**覆盖写**的，没有历史。历史用量靠各工具自己的日志留着。
 旧版本把快照叫 `snapshot.json`，现在统一叫 `state.json`；

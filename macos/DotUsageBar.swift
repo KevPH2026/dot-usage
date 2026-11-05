@@ -48,12 +48,21 @@ struct State: Codable {
     let generated_at: String?
     /// 图标目录的绝对路径（采集器给的）
     let icon_dir: String?
+    /// 消耗数据的统计窗口标签（近24h / 近7天 / …）
+    /// 采集器给，不同源窗口不一致时为空串
+    let window: String?
     /// 原始明细
     let rows: [UsageItem]?
     /// 按平台合并后的一行一平台，优先显示
     let platforms: [UsageItem]?
-    /// 按模型维度：今天（近 24h）+ 历史累计
+    /// 按模型维度：窗口内（默认近 24h）+ 历史累计
     let models: [ModelUsage]?
+
+    /// 显示用的窗口说法。拿不到就说「今天」——宁可保守也别写错。
+    var windowLabel: String {
+        let w = (window ?? "").trimmingCharacters(in: .whitespaces)
+        return w.isEmpty ? "今天" : w
+    }
 
     var displayRows: [UsageItem] {
         if let p = platforms, !p.isEmpty { return p }
@@ -355,7 +364,7 @@ final class AppModel: ObservableObject {
         let text: String
         if viewMode == .model {
             text = (s.models ?? []).map {
-                "\($0.model ?? "?")  今天 \(compactTokens($0.today_tokens))  累计 \(compactTokens($0.total_tokens))  \($0.total_calls ?? 0)次"
+                "\($0.model ?? "?")  \(s.windowLabel) \(compactTokens($0.today_tokens))  累计 \(compactTokens($0.total_tokens))  \($0.total_calls ?? 0)次"
             }.joined(separator: "\n")
         } else {
             text = s.displayRows.map { "\($0.label)  \($0.headline)  \($0.detail)" }.joined(separator: "\n")
@@ -412,9 +421,11 @@ struct RowView: View {
     }
 }
 
-/// 模型行：模型名 + 今天的消耗 + 历史累计
+/// 模型行：模型名 + 窗口内的消耗 + 历史累计
 struct ModelRowView: View {
     let item: ModelUsage
+    /// 统计窗口标签（近24h / 近7天 / …），从 state.json 读
+    var windowLabel: String = "今天"
 
     var body: some View {
         HStack(alignment: .top, spacing: 7) {
@@ -430,7 +441,7 @@ struct ModelRowView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                     Spacer(minLength: 4)
-                    Text("今天 \(compactTokens(item.today_tokens))")
+                    Text("\(windowLabel) \(compactTokens(item.today_tokens))")
                         .font(.system(size: 12, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle((item.today_tokens ?? 0) > 0 ? Color.primary : Color.secondary)
@@ -519,7 +530,9 @@ struct PanelView: View {
             } else {
                 let models = model.state?.models ?? []
                 if !models.isEmpty {
-                    ForEach(models.prefix(maxModelRows)) { ModelRowView(item: $0) }
+                    ForEach(models.prefix(maxModelRows)) {
+                        ModelRowView(item: $0, windowLabel: model.state?.windowLabel ?? "今天")
+                    }
                     if models.count > maxModelRows {
                         Text("还有 \(models.count - maxModelRows) 个模型，按累计排序在后面")
                             .font(.system(size: 10))
