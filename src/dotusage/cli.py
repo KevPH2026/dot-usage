@@ -303,6 +303,53 @@ def cmd_sinks(args) -> int:
     return 0
 
 
+def cmd_windows(args) -> int:
+    """各统计窗口下的 token 消耗 —— 跟工具自己的用量页对账用。
+
+    为什么要有这条命令：ZCode 的用量统计只有「全部 / 7天 / 30天」，
+    本地看板默认近 24h，窗口不同数字必然对不上。
+    跑一次就知道哪个窗口能跟 ZCode 页面上那个数对上。
+    """
+    from dotusage.sources.base import SourceSpec
+    from dotusage.sources.builtin import collect_builtin
+    from dotusage.sources.loader import load_config
+    from dotusage.sources.window import parse_window
+
+    windows = ["24h", "today", "7d", "30d", "all"]
+    specs = [s for s in load_config() if s.adapter == "builtin" and s.enabled]
+    if not specs:
+        print("没有可用的内置采集器")
+        return 1
+
+    head = f"  {'源':<12}" + "".join(f"{parse_window(w)[1]:>14}" for w in windows)
+    print("各统计窗口下的 token 消耗（对账用）：")
+    print(head)
+    for spec in specs:
+        cells = []
+        for w in windows:
+            probe = SourceSpec(
+                id=spec.id, name=spec.name, platform=spec.platform, icon=spec.icon,
+                adapter=spec.adapter, builtin=spec.builtin or spec.id,
+                official=spec.official, enabled=spec.enabled,
+                options={**spec.options, "window": w},
+            )
+            try:
+                rows, _rep = collect_builtin(probe.builtin or probe.id, probe)
+                tot = sum(r.total_tokens for r in rows)
+                cells.append(f"{tot:>14,}" if tot else f"{'—':>14}")
+            except Exception:  # noqa: BLE001
+                cells.append(f"{'err':>14}")
+        print(f"  {spec.id:<12}" + "".join(cells))
+    print()
+    print("当前生效的窗口（改它就改屏上的数）：")
+    for spec in specs:
+        win = spec.options.get("window") or "24h"
+        print(f"  {spec.id:<12}{parse_window(win)[1]}")
+    print()
+    print(f"改法：在 {cfgmod.sources_config_path()} 对应源下面加 [source.options] window = \"7d\"")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     cfg = cfgmod.load_config()
     print("—— 配置 ——")
@@ -394,9 +441,9 @@ def cmd_doctor(args) -> int:
             else:
                 print("  ✗ 卡2 用量消耗 → 需要一个「图像 API」或第 2 个「画板 API」内容项")
             if texts:
-                print("  ✓ 卡7 今日速览 → 文本 API（今日总量 + 最费模型）")
+                print("  ✓ 卡7 速览 → 文本 API（窗口内总量 + 最费模型）")
             else:
-                print("  · 卡7 今日速览 → 没有「文本 API」内容项，跳过")
+                print("  · 卡7 速览 → 没有「文本 API」内容项，跳过")
 
         except PushError as e:
             print(f"  ✗ 内容列表读取失败：{e}")
@@ -472,6 +519,9 @@ def main(argv=None) -> int:
 
     sk = sub.add_parser("sinks", help="打印各输出目标的开关状态")
     sk.set_defaults(func=cmd_sinks)
+
+    wn = sub.add_parser("windows", help="各统计窗口下的 token 消耗（跟工具自己的用量页对账）")
+    wn.set_defaults(func=cmd_windows)
 
     cf = sub.add_parser("config", help="查看/修改配置")
     cf.add_argument("--set", action="append", help="key=value，可重复")

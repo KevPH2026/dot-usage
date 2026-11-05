@@ -103,9 +103,33 @@ dot-usage run
 | `dot-usage doctor` | 自检：配置 / 密钥 / 设备 / 浏览器 |
 | `dot-usage show` | 打印当前状态摘要 |
 | `dot-usage sources` | 列出生效的数据源（`--init` 生成默认配置） |
+| `dot-usage windows` | 各统计窗口下的 token 消耗 —— 跟工具自己的用量页对账 |
 | `dot-usage sinks` | 打印各输出目标的开关状态 |
 
 采集周期默认 15 分钟（`config.json` 里的 `interval_minutes`）。
+
+### 统计窗口：为什么你的数和 ZCode 对不上
+
+各工具自己的用量页时间范围不一样。**ZCode 的用量统计只有「全部 / 7天 / 30天」，没有「近 24h」**；
+dot-usage 默认只看近 24h。窗口不同，数字必然对不上。
+
+跑 `dot-usage windows` 就能看到每个源在各窗口下的数，找到能跟对方对上那个：
+
+```
+$ dot-usage windows
+各统计窗口下的 token 消耗（对账用）：
+  源                     近24h            今天           近7天          近30天            全部
+  zcode          478,824,792   241,318,326 2,928,826,376 5,086,611,311 5,086,611,311
+```
+
+要改屏上显示的窗口，在 `~/.config/dot-usage/sources.toml` 对应源下面加：
+
+```toml
+[source.options]
+window = "7d"        # 24h / today / 7d / 30d / all，或任意小时数（48h）
+```
+
+卡片上会写清楚当前是哪个窗口（近24h / 近7天 / …），不会含糊。
 
 ---
 

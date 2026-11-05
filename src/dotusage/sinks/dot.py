@@ -409,9 +409,12 @@ def _push_images(device_id: str, key: str, task_type: str,
 
 
 def _today_digest(snap: dict | None = None) -> tuple[str, str] | None:
-    """今日 token 总量 + 最费的两个模型（给文本卡「今日速览」用）。
+    """窗口内的 token 总量 + 最费的两个模型（给文本卡「速览」用）。
 
     数据来自状态文件里的 models 段（按模型维度算的，比平台行更细）。
+
+    顺带算出这个合计是「哪个窗口」的数：窗口现在每个源都能单独配，
+    混着加没有意义，所以要么统一成一个窗口，要么标题里说清楚。
     """
     from dotusage.core.schema import compact
 
@@ -425,6 +428,19 @@ def _today_digest(snap: dict | None = None) -> tuple[str, str] | None:
     return compact(total), sig
 
 
+def _digest_window(snap: dict | None = None) -> str:
+    """消耗行用的窗口标签。全源同一个窗口就返回它，混着就返回空串。"""
+    snap = snap if snap is not None else (cfgmod.read_state() or {})
+    wins = {
+        str(r.get("window") or "近24h")
+        for r in (snap.get("rows") or [])
+        if r.get("kind") == "consumption" and (r.get("total_tokens") or 0) > 0
+    }
+    if len(wins) == 1:
+        return next(iter(wins))
+    return ""
+
+
 def push_dot_smart(rows, cfg: dict, api_key: str | None = None, state: dict | None = None) -> str:
     """按设备上**已有的内容项类型**自动分配通道。
 
@@ -434,7 +450,7 @@ def push_dot_smart(rows, cfg: dict, api_key: str | None = None, state: dict | No
     |---|---|---|---|
     | **Tibo 重置** | 超大 YES/NO + 上次重置 + 概率窗口 | 画板 API | 文本 API |
     | **用量消耗** | 各平台配额 + 余额 + 工具额度 | 图像 API（一屏总览） | 第 2 个画板 API |
-    | **今日速览** | 今日 token 总量 + 最费的两个模型 | 文本 API | — |
+    | **速览** | 窗口内 token 总量 + 最费的两个模型 | 文本 API | — |
 
     通道分配要看**设备上已经有哪几类内容项**，没有的跳过。
     画板只有 1 个时给 Tibo（画板版文字最锐利），消耗卡就走图像 API。
@@ -604,19 +620,23 @@ def push_dot_smart(rows, cfg: dict, api_key: str | None = None, state: dict | No
         push_canvas(quota_pages, canvas_keys[canvas_idx], f"{alias_base} 消耗")
         msgs.append("消耗卡 → 画板 API")
 
-    # ---- 卡 3：今日速览（文本 API：一行大字 + 一行签名）----
+    # ---- 卡 3：速览（文本 API：一行大字 + 一行签名）----
     if text_keys:
         try:
             sig3 = _today_digest(snap)
             if sig3:
+                # 标题跟着实际窗口走：默认近24h 就写「近24h token 消耗」，
+                # 各源窗口不一致时不硬写「今日」，免得对不上账。
+                win = _digest_window(snap)
+                title = f"{win} token 消耗" if win else "token 消耗"
                 push_dot_text(
-                    cfg, key, task_key=text_keys[0], alias="今日速览",
-                    title="今日 token 消耗", message=sig3[0], signature=sig3[1],
+                    cfg, key, task_key=text_keys[0], alias="速览",
+                    title=title, message=sig3[0], signature=sig3[1],
                     icon_name="summary",
                 )
-                msgs.append("今日速览 → 文本 API")
+                msgs.append("速览 → 文本 API")
         except PushError as e:
-            msgs.append(f"今日速览失败：{e}")
+            msgs.append(f"速览失败：{e}")
 
     if not msgs:
         raise PushError(
