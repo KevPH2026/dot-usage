@@ -30,6 +30,7 @@
 | ![Tibo 重置监测：YES/NO 判定、上次重置时间、24h/48h 概率、时间窗口](docs/images/device-tibo.png)<br>**Tibo 重置监测** —— 广域额度要不要重置 | ![今日速览：今日 token 总量与最费的两个模型](docs/images/today.png)<br>**今日速览** —— 今天烧了多少 |
 
 菜单栏那一端：抬头是各平台配额，点开是逐平台明细、模型排行和最近 24 小时的曲线。
+再加一个「趋势」tab：近 30 天每日消耗折线 + 累计成本曲线，一眼看出这段时间烧得多快、值不值。
 
 ![macOS 菜单栏面板：顶部显示各平台配额百分比，点开是逐平台明细](docs/images/menubar.png)
 
@@ -133,6 +134,37 @@ window = "7d"        # 24h / today / 7d / 30d / all，或任意小时数（48h�
 
 ---
 
+## 价格：把 token 折成钱
+
+**本地日志里没有钱**，因为大部分人用的是订阅制（M Plan / GLM Coding Plan / ChatGPT），
+钱是包月付的，工具自己也不知道「这次调用值多少钱」。
+
+dot-usage 用**官方公开单价**折算一个「等效 API 价」，菜单栏「趋势」tab 能看：
+
+```
+累计等效成本  ¥4.9万  按 API 单价折算
+```
+
+> ⚠️ 这是**折算值，不是你账单上的钱**。你付的是月费，
+> 这个数字只用来回答「这些 token 如果按量买要多少钱」「订阅买得值不值」。
+
+单价表内置在 `src/dotusage/sources/pricing.py`（抓取日期 2026-11-05），
+覆盖 MiniMax / 智谱 GLM / DeepSeek / OpenAI。**厂商会调价**，改自己的价：
+
+```toml
+# ~/.config/dot-usage/sources.toml
+[pricing."glm-5.3"]
+input = 8.0          # 元/百万 tokens
+output = 28.0
+cache_read = 2.0
+currency = "CNY"
+```
+
+模型名按**最长前缀**匹配，所以 `glm-5.3-flash` 不会被 `glm-5.3` 抢走，
+`gpt-6.1-sol-900k` 走 `gpt-6.1-sol` 的价。美元价格按汇率折成人民币。
+
+---
+
 ## 支持的数据源
 
 | 工具 | 用量数据从哪读 | 官方配额从哪来 |
@@ -218,7 +250,7 @@ window_hours = 24
 | `sources` | `src/dotusage/sources/` | 读本机日志和数据库、问官方接口 |
 | `cards` | `src/dotusage/cards/` | 把数据变成一张能看的屏（HTML / PNG / 画板 JSON） |
 | `sinks` | `src/dotusage/sinks/` | 输出目标，可插拔：现在只有墨水屏一种，加新的不用改 core |
-| `macos` | `menubar/DotUsageBar.swift` | 菜单栏面板，只读状态文件，完全不知道墨水屏存在 |
+| `macos` | `macos/DotUsageBar.swift` | 菜单栏面板（配额 / 模型 / 趋势 三个 tab），只读状态文件，完全不知道墨水屏存在 |
 
 数据流：
 

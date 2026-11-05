@@ -69,7 +69,47 @@ def do_collect() -> tuple[list[UsageRow], dict]:
     except Exception as e:  # noqa: BLE001
         cfgmod.log_line(f"pulse collect failed: {e}")
 
-    state = build_state(rows, reports, models, pulse, projects)
+    # 每日趋势（近 30 天按天 × 模型）——菜单栏「趋势」tab 的数据源
+    trend: dict = {}
+    try:
+        from dotusage.core.trend import collect_daily
+
+        trend = collect_daily(30)
+    except Exception as e:  # noqa: BLE001
+        cfgmod.log_line(f"trend collect failed: {e}")
+
+    # 等效成本：按官方 API 单价折算（不是账单，是「按量买要多少钱」）
+    cost: dict = {}
+    try:
+        from dotusage.sources.pricing import summarize_cost
+
+        cost = summarize_cost(rows)
+    except Exception as e:  # noqa: BLE001
+        cfgmod.log_line(f"pricing failed: {e}")
+
+    # 累计折算成本：models 段带的是**全历史**，这里汇总成「总共花了多少」
+    try:
+        total_cny = sum(float(m.get("total_cost") or 0) for m in models)
+        cost["total_cumulative"] = round(total_cny, 2)
+        cost["estimated"] = any(m.get("estimated") for m in models)
+        cost["by_model_cumulative"] = sorted(
+            (
+                {
+                    "model": m.get("model"),
+                    "platform": m.get("platform"),
+                    "cost": round(float(m.get("total_cost") or 0), 2),
+                    "tokens": int(m.get("total_tokens") or 0),
+                    "estimated": bool(m.get("estimated")),
+                }
+                for m in models
+                if (m.get("total_cost") or 0) > 0
+            ),
+            key=lambda x: -x["cost"],
+        )
+    except Exception as e:  # noqa: BLE001
+        cfgmod.log_line(f"cumulative cost failed: {e}")
+
+    state = build_state(rows, reports, models, pulse, projects, trend=trend, cost=cost)
     return rows, state
 
 

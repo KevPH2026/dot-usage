@@ -20,7 +20,8 @@ from .base import Sink, register
 STATE_VERSION = 1
 
 
-def build_state(rows, reports=None, models=None, pulse=None, projects=None) -> dict:
+def build_state(rows, reports=None, models=None, pulse=None, projects=None,
+                trend=None, cost=None) -> dict:
     """组装 state.json 的内容。
 
     字段就是契约本身，桌面端只认这些：
@@ -33,6 +34,8 @@ def build_state(rows, reports=None, models=None, pulse=None, projects=None) -> d
     - models         按模型维度
     - pulse          近 48 小时的消耗节奏
     - projects       按工作目录拆的账
+    - daily          近 30 天按天 × 模型的消耗与折算成本
+    - cost           当前窗口的等效成本（按官方 API 单价折算）
     - sources        各数据源的采集状态
     - rows           原始明细（排查用）
     """
@@ -58,6 +61,8 @@ def build_state(rows, reports=None, models=None, pulse=None, projects=None) -> d
         "models": list(models or []),
         "pulse": pulse or {},
         "projects": projects or {},
+        "daily": trend or {},
+        "cost": cost or {},
         "sources": [rep.to_dict() for rep in (reports or [])],
         "rows": [r.to_dict() for r in rows],
     }

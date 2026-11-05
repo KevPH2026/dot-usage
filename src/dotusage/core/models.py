@@ -89,18 +89,30 @@ class ModelUsage:
     platform: str
     model: str
     icon: str = ""
+    # 数据来源（zcode / codex / minimax …）。算钱时要用：
+    # 有些源的 input_tokens 含缓存读，有些不含，语义不一样。
+    source: str = ""
     today_tokens: int = 0
     today_calls: int = 0
     today_cost: float = 0.0
     total_tokens: int = 0
     total_calls: int = 0
     total_cost: float = 0.0
+    # 输入/输出/缓存读的 token 数（累计）。
+    # 算钱要用：输入和输出单价不一样，只记总数折不出价。
+    total_input: int = 0
+    total_output: int = 0
+    total_cache_read: int = 0
+    # estimated = True 表示这个成本是按官方 API 单价**折算**的，
+    # 不是账单上的钱（订阅制工具本来没有按次计费）。
+    estimated: bool = False
     last_at: float = 0.0
 
     def to_dict(self) -> dict:
         return {
             "platform": self.platform,
             "model": self.model,
+            "source": self.source,
             "icon": self.icon,
             "today_tokens": self.today_tokens,
             "today_calls": self.today_calls,
@@ -108,27 +120,37 @@ class ModelUsage:
             "total_tokens": self.total_tokens,
             "total_calls": self.total_calls,
             "total_cost": round(self.total_cost, 4),
+            "total_input": self.total_input,
+            "total_output": self.total_output,
+            "total_cache_read": self.total_cache_read,
+            "estimated": self.estimated,
             "last_at": self.last_at,
         }
 
 
 def _merge(bucket: dict[str, ModelUsage], source: str, model: str,
            *, today_tokens=0, today_calls=0, today_cost=0.0,
-           total_tokens=0, total_calls=0, total_cost=0.0, last_at=0.0) -> None:
+           total_tokens=0, total_calls=0, total_cost=0.0, last_at=0.0,
+           total_input=0, total_output=0, total_cache_read=0) -> None:
     """按归一化后的模型名累加。"""
     name = _norm_model(model) or "unknown"
     key = name.lower()
     u = bucket.get(key)
     if u is None:
         platform, icon = _infer_platform(name, source)
-        u = ModelUsage(platform=platform, model=name, icon=icon)
+        u = ModelUsage(platform=platform, model=name, icon=icon, source=source)
         bucket[key] = u
+    elif source and not u.source:
+        u.source = source
     u.today_tokens += today_tokens
     u.today_calls += today_calls
     u.today_cost += today_cost
     u.total_tokens += total_tokens
     u.total_calls += total_calls
     u.total_cost += total_cost
+    u.total_input += total_input
+    u.total_output += total_output
+    u.total_cache_read += total_cache_read
     if last_at:
         u.last_at = max(u.last_at, last_at)
 
@@ -158,6 +180,9 @@ def _zcode(bucket: dict) -> None:
         " COUNT(*) AS calls,"
         " SUM(CASE WHEN started_at > ? THEN input_tokens + output_tokens ELSE 0 END) AS tok24,"
         " SUM(CASE WHEN started_at > ? THEN 1 ELSE 0 END) AS calls24,"
+        " SUM(input_tokens) AS inp,"
+        " SUM(output_tokens) AS outp,"
+        " SUM(cache_read_input_tokens) AS cread,"
         " MAX(started_at) AS last_at"
         " FROM model_usage GROUP BY model_id",
         (since_ms, since_ms),
@@ -169,6 +194,9 @@ def _zcode(bucket: dict) -> None:
             total_tokens=int(r["tok"] or 0),
             total_calls=int(r["calls"] or 0),
             last_at=float(r["last_at"] or 0) / 1000,
+            total_input=int(r["inp"] or 0),
+            total_output=int(r["outp"] or 0),
+            total_cache_read=int(r["cread"] or 0),
         )
 
 
@@ -335,15 +363,20 @@ def _codex_model_in(line: bytes) -> str:
     return ""
 
 
-def _codex_scan(path: Path) -> tuple[int, int, str]:
-    """扫一个 rollout 文件，返回 (累计 token, 累计请求数, 模型名)。
+def _codex_scan(path: Path) -> tuple[int, int, str, int, int, int]:
+    """扫一个 rollout 文件，返回 (累计 token, 累计请求数, 模型名, 输入, 输出, 缓存读)。
 
     只对含 token_count / turn_context 的行做 JSON 解析，其余行只做字节包含判断。
     模型名取**最后一次** turn_context（会话中途可能换过模型）。
+
+    输入/输出/缓存要分开记：算钱要用不同的单价，只记总数折不出价。
     """
     total = 0
     calls = 0
     model = ""
+    inp = 0
+    outp = 0
+    cread = 0
     try:
         with path.open("rb") as fh:
             buf = b""
@@ -367,6 +400,9 @@ def _codex_scan(path: Path) -> tuple[int, int, str]:
                         continue
                     last = _codex_last(d)
                     total += int(last.get("total_tokens") or 0)
+                    inp += int(last.get("input_tokens") or 0)
+                    outp += int(last.get("output_tokens") or 0)
+                    cread += int(last.get("cached_input_tokens") or 0)
                     calls += 1
             if buf:
                 if b'"turn_context"' in buf:
@@ -376,19 +412,45 @@ def _codex_scan(path: Path) -> tuple[int, int, str]:
                 if b'"token_count"' in buf:
                     try:
                         d = json.loads(buf)
-                        total += int(_codex_last(d).get("total_tokens") or 0)
+                        last = _codex_last(d)
+                        total += int(last.get("total_tokens") or 0)
+                        inp += int(last.get("input_tokens") or 0)
+                        outp += int(last.get("output_tokens") or 0)
+                        cread += int(last.get("cached_input_tokens") or 0)
                         calls += 1
                     except Exception:  # noqa: BLE001
                         pass
     except Exception:  # noqa: BLE001
         pass
-    return total, calls, model
+    return total, calls, model, inp, outp, cread
 
 
 def _codex_last(d: dict) -> dict:
     pl = d.get("payload") or {}
     info = pl.get("info") or {}
     return info.get("last_token_usage") or pl.get("last_token_usage") or {}
+
+
+def _cache_entry_ok(entry) -> bool:
+    """缓存条目必须是**新格式**才算数。
+
+    踩过的坑：早期版本往同一份缓存里写过另一种结构——
+    `t` 是 0、`c` 存的是**工作目录**、模型名在 `d`。
+    老代码 `int(e.get("c") or 0)` 遇到这种直接抛 ValueError，
+    而 collect_model_usage 又是 `except Exception: continue`，
+    结果整个 codex 聚合静默中断，面板上只剩几千 K 的零碎数字。
+
+    所以这里显式校验格式：不对就当没有，重扫一遍。
+    """
+    if not isinstance(entry, dict):
+        return False
+    if not isinstance(entry.get("t"), int):
+        return False
+    if not isinstance(entry.get("c"), int):
+        return False
+    if not isinstance(entry.get("d"), str) or not entry.get("d"):
+        return False
+    return True
 
 
 def _codex(bucket: dict) -> None:
@@ -418,10 +480,19 @@ def _codex(bucket: dict) -> None:
         except OSError:
             continue
         old = cache.get(key)
-        if old and int(old.get("m", 0)) == int(st.st_mtime) and int(old.get("s", 0)) == st.st_size:
+        if (
+            old
+            and _cache_entry_ok(old)
+            and int(old.get("m", 0)) == int(st.st_mtime)
+            and int(old.get("s", 0)) == st.st_size
+        ):
             continue
-        tok, calls, model = _codex_scan(p)
-        cache[key] = {"m": st.st_mtime, "s": st.st_size, "t": tok, "c": calls, "d": model}
+        tok, calls, model, inp, outp, cread = _codex_scan(p)
+        cache[key] = {
+            "m": st.st_mtime, "s": st.st_size,
+            "t": tok, "c": calls, "d": model,
+            "i": inp, "o": outp, "r": cread,
+        }
         changed += 1
 
     global _CODEX_CACHE
@@ -434,15 +505,20 @@ def _codex(bucket: dict) -> None:
             pass
 
     # ---- 累计：按模型汇总缓存 ----
-    total_by_model: dict[str, dict] = defaultdict(lambda: {"tok": 0, "calls": 0})
+    total_by_model: dict[str, dict] = defaultdict(
+        lambda: {"tok": 0, "calls": 0, "inp": 0, "outp": 0, "cread": 0}
+    )
     for p in files:
         e = cache.get(str(p))
-        if not e:
+        if not e or not _cache_entry_ok(e):
             continue
         m = str(e.get("d") or "") or "unknown"
         a = total_by_model[m]
         a["tok"] += int(e.get("t") or 0)
         a["calls"] += int(e.get("c") or 0)
+        a["inp"] += int(e.get("i") or 0)
+        a["outp"] += int(e.get("o") or 0)
+        a["cread"] += int(e.get("r") or 0)
 
     # ---- 今天：只扫最近活跃的文件 ----
     cutoff = now_ts() - DAY
@@ -464,6 +540,9 @@ def _codex(bucket: dict) -> None:
             today_calls=int(t["calls"]),
             total_tokens=int(a["tok"]),
             total_calls=int(a["calls"]),
+            total_input=int(a["inp"]),
+            total_output=int(a["outp"]),
+            total_cache_read=int(a["cread"]),
         )
 
 
@@ -476,14 +555,11 @@ def _load_codex_cache() -> dict:
     return {}
 
 
-def codex_events(cutoff_ts: float, tail_bytes: int = 4 * 1024 * 1024):
-    """扫「cutoff 之后」的 Codex token_count 事件。
+def codex_events_detail(cutoff_ts: float, tail_bytes: int = 4 * 1024 * 1024):
+    """跟 `codex_events` 一样，但产出**带输入/输出/缓存拆分**的明细。
 
-    关键：**只读文件尾部**。~/.codex/sessions 有 500+ 个文件、
-    近 24h 活跃的就有 98 个（合计 2.5GB），整份读一遍要几十秒。
-    会话文件是追加写的，最近的事件一定在尾部，读尾 4MB 就够。
-
-    产出 (时间戳, token 数, 该文件用的模型)。
+    产出 (时间戳, 模型, 输入, 输出, 缓存读, 总量, 文件路径)。
+    算钱要用：输入和输出的单价不一样，只知道总量折不出价。
     """
     root = HOME / ".codex" / "sessions"
     if not root.exists():
@@ -521,7 +597,24 @@ def codex_events(cutoff_ts: float, tail_bytes: int = 4 * 1024 * 1024):
             pl = d.get("payload") or {}
             info = pl.get("info") or {}
             last = info.get("last_token_usage") or pl.get("last_token_usage") or {}
-            yield ts, int(last.get("total_tokens") or 0), model, str(p)
+            inp = int(last.get("input_tokens") or 0)
+            outp = int(last.get("output_tokens") or 0)
+            cread = int(last.get("cached_input_tokens") or 0)
+            total = int(last.get("total_tokens") or 0) or (inp + outp)
+            yield ts, model, inp, outp, cread, total, str(p)
+
+
+def codex_events(cutoff_ts: float, tail_bytes: int = 4 * 1024 * 1024):
+    """扫「cutoff 之后」的 Codex token_count 事件。
+
+    关键：**只读文件尾部**。~/.codex/sessions 有 500+ 个文件、
+    近 24h 活跃的就有 98 个（合计 2.5GB），整份读一遍要几十秒。
+    会话文件是追加写的，最近的事件一定在尾部，读尾 4MB 就够。
+
+    产出 (时间戳, token 数, 该文件用的模型)。
+    """
+    for ts, model, _inp, _outp, _cread, total, path in codex_events_detail(cutoff_ts, tail_bytes):
+        yield ts, total, model, path
 
 
 _SCAN_CACHE: dict = {}
@@ -565,8 +658,39 @@ def collect_model_usage() -> list[ModelUsage]:
     for fn in (_zcode, _minimax, _hermes, _opencode, _claude, _codex):
         try:
             fn(bucket)
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            # 别静默吞：一个源挂了却什么都不说，出来的数就是错的，
+            # 而且没人知道错在哪（踩过：codex 因为缓存格式不一致整个中断，
+            # 面板上只剩几千 K，看着像「没怎么用」）。
+            from dotusage.util import config as cfgmod
+
+            cfgmod.log_line(f"model_usage: {fn.__name__} 失败：{type(e).__name__}: {e}")
             continue
+    _fill_estimated_cost(bucket.values())
     out = [u for u in bucket.values() if u.total_tokens > 0 or u.today_tokens > 0]
     out.sort(key=lambda u: (u.today_tokens, u.total_tokens), reverse=True)
     return out
+
+
+def _fill_estimated_cost(usages) -> None:
+    """给**没有真实计费**的模型补上「按官方 API 单价折算」的累计成本。
+
+    订阅制工具（M Plan / GLM Coding Plan / ChatGPT）本地日志里没有钱，
+    但「这些 token 按量买要多少钱」是个有用的参考，所以折算一个数。
+    折算出来的标 `estimated=True`，界面上要标清楚不是账单。
+    """
+    from dotusage.sources.pricing import estimate
+
+    from dotusage.sources.pricing import CACHE_INCLUSIVE_SOURCES
+
+    for u in usages:
+        if u.total_cost and u.total_cost > 0:
+            continue  # 有真实计费（minimax/opencode/hermes 的表里带 cost）
+        c = estimate(
+            u.model, u.total_input, u.total_output, u.total_cache_read,
+            cache_included=u.source in CACHE_INCLUSIVE_SOURCES,
+        )
+        if c is None or c <= 0:
+            continue
+        u.total_cost = c
+        u.estimated = True

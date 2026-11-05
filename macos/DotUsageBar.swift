@@ -57,6 +57,10 @@ struct State: Codable {
     let platforms: [UsageItem]?
     /// 按模型维度：窗口内（默认近 24h）+ 历史累计
     let models: [ModelUsage]?
+    /// 近 30 天按天 × 模型的消耗与折算成本
+    let daily: DailyTrend?
+    /// 等效成本（按官方 API 单价折算）
+    let cost: CostSummary?
 
     /// 显示用的窗口说法。拿不到就说「今天」——宁可保守也别写错。
     var windowLabel: String {
@@ -75,20 +79,79 @@ struct ModelUsage: Codable, Identifiable {
     let platform: String?
     let model: String?
     let icon: String?
+    let source: String?
     let today_tokens: Int?
     let today_calls: Int?
     let today_cost: Double?
     let total_tokens: Int?
     let total_calls: Int?
     let total_cost: Double?
+    /// 这个成本是按官方 API 单价**折算**的，不是账单上的钱
+    let estimated: Bool?
 
     var id: String { (platform ?? "?") + "|" + (model ?? "?") }
+}
+
+/// 每日趋势里的一条模型曲线
+struct TrendSeries: Codable, Identifiable {
+    let model: String?
+    let platform: String?
+    let icon: String?
+    /// 每天的 token
+    let tokens: [Int]?
+    /// 每天的折算成本（元）
+    let cost: [Double?]?
+    let total: Int?
+    let total_cost: Double?
+
+    var id: String { model ?? "?" }
+}
+
+/// 近 N 天按天 × 模型的消耗（菜单栏「趋势」tab）
+struct DailyTrend: Codable {
+    let days: [String]?
+    let series: [TrendSeries]?
+    let by_day: [Int]?
+    let by_day_cost: [Double]?
+    let total_cost: Double?
+    let currency: String?
+}
+
+/// 等效成本汇总
+struct CostSummary: Codable {
+    let currency: String?
+    /// 当前窗口的折算成本
+    let total: Double?
+    /// 全历史累计折算成本
+    let total_cumulative: Double?
+    let estimated: Bool?
+    let by_model: [CostItem]?
+    let by_model_cumulative: [CostItem]?
+}
+
+struct CostItem: Codable, Identifiable {
+    let model: String?
+    let platform: String?
+    let cost: Double?
+    let tokens: Int?
+    let estimated: Bool?
+
+    var id: String { model ?? "?" }
+}
+
+/// 离屏渲染模式。
+///
+/// ImageRenderer 抓不到动画中间态（会截到一半），
+/// 所以自查排版时要把动画关掉，渲染出**最终**画面。
+enum RenderMode {
+    nonisolated(unsafe) static var isOffscreen = false
 }
 
 /// 面板视图切换
 enum PanelTab: String, CaseIterable, Identifiable {
     case quota = "配额"
     case model = "模型"
+    case trend = "趋势"
 
     var id: String { rawValue }
 }
@@ -280,8 +343,10 @@ final class AppModel: ObservableObject {
     @Published var state: State?
     @Published var busy: Bool = false
     @Published var lastError: String = ""
-    /// 面板视图：配额 / 模型
+    /// 面板视图：配额 / 模型 / 趋势
     @Published var viewMode: PanelTab = .quota
+    /// 趋势图的动画进度（0→1，把线「画出来」）
+    @Published var chartReveal: CGFloat = 1
 
     /// 状态变化时回调，用于刷新菜单栏标题
     var onChange: (() -> Void)?
@@ -344,6 +409,18 @@ final class AppModel: ObservableObject {
         onChange?()
     }
 
+    /// 趋势图进场动画：把 reveal 从 0 推到 1，线就一��画出来。
+    ///
+    /// 离屏渲染时关掉——ImageRenderer 抓不到动画中间态，
+    /// 自查排版要看到的是**最终**画面。
+    func startChartAnimation() {
+        guard !RenderMode.isOffscreen else { return }
+        chartReveal = 0
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.8)) { self.chartReveal = 1 }
+        }
+    }
+
     func openPreview() {
         let path = ProcessInfo.processInfo.environment["DOT_USAGE_PREVIEW"]
             ?? NSString(string: "~/Tools/dot-usage/preview/card-preview.html").expandingTildeInPath
@@ -372,6 +449,298 @@ final class AppModel: ObservableObject {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
+}
+
+
+// MARK: - 趋势图
+
+/// 把折线画平滑。
+///
+/// 直线段连起来太生硬，用 Catmull-Rom 样条转成三次贝塞尔：
+/// 每个点用前后两个邻居算出控制柄，曲线就顺了，
+/// 而且不会像样条拟合那样冲出数据范围。
+func smoothPath(_ points: [CGPoint], tension: CGFloat = 0.2) -> Path {
+    var path = Path()
+    guard points.count > 1 else {
+        if let p = points.first { path.move(to: p) }
+        return path
+    }
+    path.move(to: points[0])
+    for i in 0..<(points.count - 1) {
+        let p0 = points[max(i - 1, 0)]
+        let p1 = points[i]
+        let p2 = points[i + 1]
+        let p3 = points[min(i + 2, points.count - 1)]
+        let c1 = CGPoint(
+            x: p1.x + (p2.x - p0.x) * tension,
+            y: p1.y + (p2.y - p0.y) * tension
+        )
+        let c2 = CGPoint(
+            x: p2.x - (p3.x - p1.x) * tension,
+            y: p2.y - (p3.y - p1.y) * tension
+        )
+        path.addCurve(to: p2, control1: c1, control2: c2)
+    }
+    return path
+}
+
+/// 每日 token 折线图（按模型多条线，手绘，不用图表库）。
+///
+/// 所有系列共用一套坐标——不同量级的模型画在一起才看得出谁在烧。
+struct TrendChartView: View {
+    let days: [String]
+    let series: [TrendSeries]
+    let height: CGFloat
+    /// 0→1 的显示进度（用来把线「画出来」）
+    var reveal: CGFloat = 1
+
+    /// 折线的配色（冷暖交替，一眼能分开）
+    private static let palette: [Color] = [
+        Color(red: 0.20, green: 0.45, blue: 0.95),
+        Color(red: 0.10, green: 0.65, blue: 0.40),
+        Color(red: 0.55, green: 0.35, blue: 0.90),
+        Color(red: 0.90, green: 0.25, blue: 0.25),
+        Color(red: 0.95, green: 0.55, blue: 0.10),
+        Color(red: 0.10, green: 0.70, blue: 0.72),
+    ]
+
+    private var maxValue: Double {
+        let m = series.flatMap { $0.tokens ?? [] }.map { Double($0) }.max() ?? 1
+        return max(m, 1)
+    }
+
+    private func points(_ vals: [Int], w: CGFloat, h: CGFloat) -> [CGPoint] {
+        let n = max(days.count, 1)
+        guard n > 1 else { return [] }
+        return vals.enumerated().map { i, v in
+            CGPoint(
+                x: w * Double(i) / Double(n - 1),
+                y: h * (1.0 - Double(v) / maxValue)
+            )
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            GeometryReader { geo in
+                let w = geo.size.width
+                let h = geo.size.height
+                ZStack(alignment: .topLeading) {
+                    // 纵轴刻度：顶部标一下最大值，不然不知道线多高
+                    Text(compactTokens(Int(maxValue)))
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 2)
+                    // 横向参考线
+                    ForEach(0..<3) { i in
+                        let y = h * Double(i) / 2.0
+                        Path { p in
+                            p.move(to: CGPoint(x: 0, y: y))
+                            p.addLine(to: CGPoint(x: w, y: y))
+                        }
+                        .stroke(Color.secondary.opacity(0.18), style: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                    }
+                    // 每条曲线
+                    ForEach(Array(series.enumerated()), id: \.element.id) { idx, s in
+                        let pts = points(s.tokens ?? [], w: w, h: h)
+                        if pts.count > 1 {
+                            smoothPath(pts)
+                                .trimmedPath(from: 0, to: reveal)
+                                .stroke(
+                                    Self.palette[idx % Self.palette.count],
+                                    style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round)
+                                )
+                        }
+                    }
+                }
+            }
+            .frame(height: height)
+
+            // x 轴：首尾两个日期，中间不标（挤）
+            HStack {
+                Text(days.first ?? "")
+                Spacer()
+                Text(days.last ?? "")
+            }
+            .font(.system(size: 9))
+            .foregroundStyle(.secondary)
+
+            // 图例
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(series.enumerated()), id: \.element.id) { idx, s in
+                    HStack(spacing: 5) {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(Self.palette[idx % Self.palette.count])
+                            .frame(width: 9, height: 3)
+                        Text(s.model ?? "?")
+                            .font(.system(size: 9))
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text(compactTokens(s.total))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 累加：把「每天的值」变成「到这天为止一共多少」。
+func runningSum(_ values: [Double]) -> [Double] {
+    var out: [Double] = []
+    var acc = 0.0
+    for v in values {
+        acc += v
+        out.append(acc)
+    }
+    return out
+}
+
+/// 折线下方补到基线的闭合路径（用来填面积）。
+func areaPath(_ points: [CGPoint], h: CGFloat) -> Path {
+    var area = smoothPath(points)
+    if let last = points.last, let first = points.first {
+        area.addLine(to: CGPoint(x: last.x, y: h))
+        area.addLine(to: CGPoint(x: first.x, y: h))
+        area.closeSubpath()
+    }
+    return area
+}
+
+/// 累计曲线（单线 + 面积填充）。
+///
+/// 上面那张是「每天烧多少」，这张是「到今天为止一共烧了多少」——
+/// 后者更能看出这段时间的烧钱速度。
+struct CumulativeChartView: View {
+    let values: [Double]
+    let height: CGFloat
+    var color: Color = Color(red: 0.20, green: 0.45, blue: 0.95)
+    /// 0→1 的显示进度
+    var reveal: CGFloat = 1
+
+    private var maxValue: Double { max(values.max() ?? 1, 0.0001) }
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let n = max(values.count, 1)
+            let pts: [CGPoint] = n > 1 ? values.enumerated().map { i, v in
+                CGPoint(
+                    x: w * Double(i) / Double(n - 1),
+                    y: h * (1.0 - v / maxValue)
+                )
+            } : []
+
+            ZStack(alignment: .topLeading) {
+                if pts.count > 1 {
+                    // 面积
+                    areaPath(pts, h: h)
+                        .trimmedPath(from: 0, to: reveal)
+                        .fill(
+                            LinearGradient(
+                                colors: [color.opacity(0.28), color.opacity(0.02)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
+                    // 线
+                    smoothPath(pts)
+                        .trimmedPath(from: 0, to: reveal)
+                        .stroke(color, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                    // 末端一个点
+                    if let last = pts.last {
+                        Circle()
+                            .fill(color)
+                            .frame(width: 3.5, height: 3.5)
+                            .position(last)
+                            .opacity(Double(reveal))
+                    }
+                }
+                Text("¥\(compactMoney(maxValue))")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 2)
+            }
+        }
+        .frame(height: height)
+    }
+}
+
+/// 「趋势」tab 的内容：每日折线 + 累计曲线 + 累计价格
+struct TrendPanelView: View {
+    let daily: DailyTrend?
+    let cost: CostSummary?
+    /// 动画进度（0→1）
+    var reveal: CGFloat = 1
+
+    var body: some View {
+        let days = daily?.days ?? []
+        let series = daily?.series ?? []
+        if days.isEmpty || series.isEmpty {
+            Text("还没有趋势数据，点下面的刷新")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                // 累计折算成本
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("累计等效成本")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    Text("¥\(compactMoney(cost?.total_cumulative))")
+                        .font(.system(size: 17, weight: .bold))
+                        .monospacedDigit()
+                    if cost?.estimated == true {
+                        Text("按 API 单价折算")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text("近\(days.count)天")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+
+                // 每日消耗
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("每日消耗")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    TrendChartView(days: days, series: series, height: 78, reveal: reveal)
+                }
+
+                // 累计成本曲线（by_day_cost 是每天的，这里跑累加）
+                let cumulative = runningSum(daily?.by_day_cost ?? [])
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text("累计成本（近\(days.count)天）")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("¥\(compactMoney(cumulative.last ?? 0))")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    CumulativeChartView(
+                        values: cumulative,
+                        height: 46,
+                        reveal: reveal
+                    )
+                }
+            }
+        }
+    }
+}
+
+/// 金额压成短串：1234 → ¥1234 / 12345 → ¥1.23万
+func compactMoney(_ n: Double?) -> String {
+    guard let n, n > 0 else { return "—" }
+    if n >= 10_000 { return String(format: "%.1f万", n / 10_000) }
+    if n >= 1000 { return String(format: "%.0f", n) }
+    return String(format: "%.1f", n)
 }
 
 // MARK: - 面板界面
@@ -512,6 +881,7 @@ struct PanelView: View {
 
             Divider()
 
+            Group {
             if !model.hasState {
                 // 读不到状态文件 = 还没采集过
                 Text("还没有状态文件")
@@ -527,6 +897,13 @@ struct PanelView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
+            } else if model.viewMode == .trend {
+                TrendPanelView(
+                    daily: model.state?.daily,
+                    cost: model.state?.cost,
+                    reveal: model.chartReveal
+                )
+                .onAppear { model.startChartAnimation() }
             } else {
                 let models = model.state?.models ?? []
                 if !models.isEmpty {
@@ -539,12 +916,33 @@ struct PanelView: View {
                             .foregroundStyle(.secondary)
                             .padding(.top, 2)
                     }
+                    // 累计折算成本（模型面板底部也带一份，方便直接看）
+                    if let c = model.state?.cost?.total_cumulative, c > 0 {
+                        Divider().padding(.vertical, 4)
+                        HStack(spacing: 6) {
+                            Text("累计等效成本")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                            Text("¥\(compactMoney(c))")
+                                .font(.system(size: 12, weight: .semibold))
+                                .monospacedDigit()
+                            if model.state?.cost?.estimated == true {
+                                Text("按 API 单价折算")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                    }
                 } else {
                     Text("还没有模型数据，点下面的刷新")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
             }
+            }
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.16), value: model.viewMode)
 
             if !model.lastError.isEmpty {
                 Text(model.lastError)
@@ -600,7 +998,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let args = CommandLine.arguments
         if let idx = args.firstIndex(of: "--render-panel"), idx + 1 < args.count {
             let out = args[idx + 1]
-            let mode: PanelTab = (idx + 2 < args.count && args[idx + 2] == "model") ? .model : .quota
+            let arg = idx + 2 < args.count ? args[idx + 2] : "quota"
+            let mode: PanelTab
+            switch arg {
+            case "model": mode = .model
+            case "trend": mode = .trend
+            default: mode = .quota
+            }
             model.viewMode = mode
             model.load()
             renderPanel(to: out)
@@ -643,6 +1047,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 把面板离屏渲染成 PNG（自查排版，不弹窗）
     @MainActor
     private func renderPanel(to path: String) {
+        RenderMode.isOffscreen = true
+        defer { RenderMode.isOffscreen = false }
         let view = PanelView(model: model)
             .frame(width: 340)
             .background(Color(nsColor: .windowBackgroundColor))

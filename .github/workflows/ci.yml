@@ -67,6 +67,34 @@ jobs:
           assert merged['adapter'] == 'builtin'
           print('深合并 OK')
           "
+      - name: 价格折算（缓存不能重复计费）
+        run: |
+          PYTHONPATH=src python3 -c "
+          from dotusage.sources.pricing import estimate, price_for
+          # 最长前缀命中：glm-5.3-flash 不能被 glm-5.3 抢走
+          assert price_for('glm-5.3-flash')['key'] == 'glm-5.3-flash'
+          assert price_for('gpt-6.1-sol-900k')['key'] == 'gpt-6.1-sol'
+          assert price_for('不存在的模型') is None
+          # 缓存含在 input 里时，缓存那部分只能按缓存价算一次
+          a = estimate('glm-5.3', input_tokens=1_000_000, output_tokens=0, cache_read_tokens=0)
+          b = estimate('glm-5.3', input_tokens=1_000_000, output_tokens=0, cache_read_tokens=1_000_000, cache_included=True)
+          assert a == 8.0, a
+          assert abs(b - 2.0) < 1e-6, b
+          # 没开 cache_included 时，缓存会被重复计费——这个数要明显更大
+          c = estimate('glm-5.3', input_tokens=1_000_000, output_tokens=0, cache_read_tokens=1_000_000, cache_included=False)
+          assert c > b, (c, b)
+          print('价格折算 OK')
+          "
+      - name: 每日趋势结构
+        run: |
+          PYTHONPATH=src python3 -c "
+          from dotusage.core.trend import _day_range
+          days = _day_range(30)
+          assert len(days) == 30, len(days)
+          assert days == sorted(days), '日期要升序'
+          assert days[-1] == __import__('datetime').date.today().isoformat()
+          print('趋势日期 OK')
+          "
 
   # 菜单栏 App：macOS 专属（AppKit），只能在 macOS runner 上编译。
   macos:

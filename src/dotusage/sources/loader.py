@@ -121,6 +121,35 @@ def load_config() -> list[SourceSpec]:
     return [SourceSpec.from_dict(v) for v in merged.values()]
 
 
+def pricing_overrides() -> dict:
+    """读用户配置里的 `[pricing.<模型前缀>]` 单价覆盖。
+
+    内置表在 `sources/pricing.py`，这里只管用户自己改的那部分。
+    格式：
+
+        [pricing."glm-5.3"]
+        input = 8.0
+        output = 28.0
+        cache_read = 2.0
+        currency = "CNY"
+    """
+    out: dict = {}
+    for path in (BUILTIN_CONFIG, user_config()):
+        if not path.exists() or path.suffix == ".json":
+            continue
+        data = _read_toml(path)
+        tbl = data.get("pricing")
+        if not isinstance(tbl, dict):
+            continue
+        for key, val in tbl.items():
+            if not isinstance(val, dict):
+                continue
+            merged = dict(out.get(key, {})) if key in out else {}
+            merged.update(val)
+            out[key] = merged
+    return out
+
+
 def init_config(force: bool = False) -> Path:
     """把默认配置写到用户配置目录。"""
     d = config_dir()

@@ -184,6 +184,8 @@ python3 -m dotusage.cli switch
 | `models` | list | 按模型维度：窗口内（默认近 24h）+ 历史累计 |
 | `pulse` | object | 近 48 小时的消耗节奏（按小时） |
 | `projects` | object | 按工作目录拆的账 |
+| `daily` | object | 近 30 天按天 × 模型的消耗与折算成本（菜单栏「趋势」tab） |
+| `cost` | object | 等效成本：当前窗口 + 全历史累计 + 按模型明细 |
 | `sources` | list | 每个源的状态：读到几行、报了什么错 |
 | `rows` | list | 原始明细（一行一个平台/模型/窗口），排查用 |
 
@@ -273,6 +275,8 @@ core 和 cards 都不知道 sink 的存在 —— 这是分层的意义。
 | 通用 jsonl 适配器读不了 Codex | 它的行过滤要求行内含 `"usage"` / `"tokens"`，而 Codex 用 `total_token_usage`。Codex 走内置 `codex_rollouts` 适配器 |
 | 图标目录有三层兜底 | `util/config.py:icon_dir()`：环境变量 `DOT_USAGE_ICON_DIR` → 包旁边的 `icons/png` → `~/Tools/dot-usage/icons/png`。菜单栏 App 侧同样有兜底链（`macos/DotUsageBar.swift`） |
 | 菜单栏 App 的兜底路径写死家目录 | `macos/DotUsageBar.swift` 里 `~/Tools/dot-usage/icons/png` 和 `~/Tools/dot-usage/preview/card-preview.html` 是最后兜底，装到别处时靠前两层（环境变量 / 包内） |
+| 价格是**折算值**不是账单 | 订阅制工具（M Plan / GLM Coding Plan / ChatGPT）本地日志里没有钱，所以用官方公开单价折算「等效 API 价」。单价会过时，改 `sources.toml` 的 `[pricing.<模型>]` 覆盖 |
+| 单价按**最长前缀**匹配 | `glm-5.3-flash` 不会被 `glm-5.3` 抢走，`gpt-6.1-sol-900k` 走 `gpt-6.1-sol` 的价。美元价格按汇率折成人民币 |
 | **Python 必须 3.11+** | 数据源配置用标准库 `tomllib` 读，3.9/3.10 没有它。踩过的坑：解释器是 `/usr/bin/python3`（3.9）时，配置被静默读成空，采集还「成功」，只是没数据源。现在 `sources/loader.py` 读不到 `tomllib` 直接报错退出，`cli.py` 入口也会拦一道；`install.sh` 自动挑 3.11+ 的解释器并写进 `launchd/*.plist`（`__PYTHON__` 占位） |
 | 命令行入口有两个 | `python -m dotusage …`（有 `__main__.py`）、`python -m dotusage.cli …`、以及装完后的 `dot-usage` 命令，三种都能用 |
 | 菜单栏 App 的解释器靠文件传参 | 这个 App 由 launchd **直接跑二进制**（不经 `open`），所以 `EnvironmentVariables` 生效；同时 `install.sh` 还写一份 `~/Library/Application Support/DotUsageBar/config.json`（`python` + `src_dir`）作为兜底——手动从 Finder 打开时走的是 LaunchServices，拿不到 launchd 的环境变量 |
