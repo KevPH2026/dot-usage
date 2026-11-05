@@ -3,6 +3,21 @@
 # 每个 [[source]] 描述一个工具：去哪儿读、算它属于哪个平台。
 # 想加自己的工具 → 复制一段改改 → docs/SOURCES.md
 # 改完跑 `python -m dotusage sources` 看效果。
+#
+# ── 统计窗口 ────────────────────────────────────────────────────────────
+# 每个本地源可以用 options.window 改统计范围：
+#
+#     window = "24h"     近 24 小时（滚动窗口，默认）
+#     window = "today"   今天（本地 0 点起）
+#     window = "7d"      近 7 天
+#     window = "30d"     近 30 天
+#     window = "all"     全部历史
+#     window = "48h"     任意小时数
+#
+# **为什么要能改**：ZCode 自己的用量统计只有「全部 / 7天 / 30天」，
+# 没有「近 24h」。两边窗口不同，数字必然对不上。
+# 想跟 ZCode 的数字对齐，把 zcode 的 window 改成 "7d" 或 "30d" 就行。
+# 卡片上会写清楚当前是哪个窗口（近24h / 近7天 / …），不会含糊。
 
 # ── ChatGPT / Codex ────────────────────────────────────────────────
 [[source]]
@@ -14,6 +29,9 @@ adapter = "builtin"
 builtin = "codex"
 official = "chatgpt"
 
+[source.options]
+window = "24h"
+
 # ── Z.ai / GLM Coding Plan（通过 ZCode）────────────────────────────
 [[source]]
 id = "zcode"
@@ -23,6 +41,10 @@ icon = "zai"
 adapter = "builtin"
 builtin = "zcode"
 official = "zai"
+
+# 改成 "7d" / "30d" 就能和 ZCode 用量统计页的数字对上
+[source.options]
+window = "24h"
 
 # ── MiniMax ───────────────────────────────────────────────────────
 [[source]]
@@ -34,6 +56,9 @@ adapter = "builtin"
 builtin = "minimax"
 official = "minimax"
 
+[source.options]
+window = "24h"
+
 # ── Claude Code ───────────────────────────────────────────────────
 [[source]]
 id = "claude"
@@ -42,6 +67,9 @@ platform = "Claude"
 icon = "chatgpt"
 adapter = "builtin"
 builtin = "claude"
+
+[source.options]
+window = "24h"
 
 # ── OpenCode ──────────────────────────────────────────────────────
 [[source]]
@@ -52,6 +80,9 @@ icon = "opencode"
 adapter = "builtin"
 builtin = "opencode"
 
+[source.options]
+window = "24h"
+
 # ── Hermes（跨 provider 的账本）──────────────────────────────────
 [[source]]
 id = "hermes"
@@ -60,6 +91,9 @@ platform = "Hermes"
 icon = "hermes"
 adapter = "builtin"
 builtin = "hermes"
+
+[source.options]
+window = "24h"
 
 # ── Grok / xAI ────────────────────────────────────────────────────
 [[source]]

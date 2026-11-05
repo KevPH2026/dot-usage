@@ -13,6 +13,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from dotusage.core.schema import SourceReport, UsageRow, now_ts, to_epoch, window_label
+from dotusage.sources.window import window_for
 
 HOME = Path.home()
 DAY = 86400
@@ -116,7 +117,7 @@ def _tail_token_events(path: Path, tail_bytes: int = 32 * 1024 * 1024) -> list[d
 # --------------------------------------------------------------------------
 # Codex —— 唯一带「配额百分比 + 重置时刻」的来源
 # --------------------------------------------------------------------------
-def collect_codex() -> tuple[list[UsageRow], SourceReport]:
+def collect_codex(spec=None) -> tuple[list[UsageRow], SourceReport]:
     rep = SourceReport("codex")
     root = HOME / ".codex" / "sessions"
     if not root.exists():
@@ -131,9 +132,13 @@ def collect_codex() -> tuple[list[UsageRow], SourceReport]:
         rep.error = f"扫描失败 {e}"
         return [], rep
 
-    fresh_cut = now_ts() - 7 * DAY
+    win_start, win_label = window_for(spec)
+    # 扫多少个会话文件、扫到什么时候，跟窗口走：
+    # 窗口越长要看得越远，文件上限同步放开（每个文件是尾部扫描，不会整份读）。
+    max_files = 12 if win_label == "近24h" else (40 if win_label == "近7天" else 120)
+    fresh_cut = win_start
     per_file: list[tuple[Path, list[dict]]] = []
-    for f in files[:12]:
+    for f in files[:max_files]:
         try:
             if f.stat().st_mtime < fresh_cut:
                 break
@@ -195,9 +200,9 @@ def collect_codex() -> tuple[list[UsageRow], SourceReport]:
             )
         )
 
-    # 消耗量：累加各会话事件的「增量」，只算 24h 内的
+    # 消耗量：累加各会话事件的「增量」，只算窗口内的
     # 注意：total_token_usage 是会话累计值，累加它会把历史重复计一遍（虚高好几倍）
-    day_cut = now_ts() - DAY
+    day_cut = win_start
     agg = {"inp": 0, "outp": 0, "cread": 0, "total": 0, "calls": 0, "last": 0.0}
     for ts, e, _f in all_events:
         if ts < day_cut:
@@ -214,7 +219,7 @@ def collect_codex() -> tuple[list[UsageRow], SourceReport]:
         rows.append(
             UsageRow(
                 source="codex",
-                label="Codex 24h",
+                label=f"Codex {win_label}",
                 model="",
                 kind="consumption",
                 input_tokens=agg["inp"],
@@ -224,6 +229,7 @@ def collect_codex() -> tuple[list[UsageRow], SourceReport]:
                 updated_at=agg["last"] or now_ts(),
                 note=f"{agg['calls']} 次请求",
                 path=str(best_file),
+                window=win_label,
             )
         )
 
@@ -238,7 +244,7 @@ def collect_codex() -> tuple[list[UsageRow], SourceReport]:
 # --------------------------------------------------------------------------
 # ZCode（Z.ai / GLM Coding Plan）—— 本地会话库里的真实用量
 # --------------------------------------------------------------------------
-def collect_zcode() -> tuple[list[UsageRow], SourceReport]:
+def collect_zcode(spec=None) -> tuple[list[UsageRow], SourceReport]:
     rep = SourceReport("zcode")
     db = HOME / ".zcode" / "cli" / "db" / "db.sqlite"
     if not db.exists():
@@ -246,7 +252,8 @@ def collect_zcode() -> tuple[list[UsageRow], SourceReport]:
         rep.error = "未找到 ~/.zcode/cli/db/db.sqlite"
         return [], rep
 
-    since = int((now_ts() - DAY) * 1000)
+    win_start, win_label = window_for(spec)
+    since = int(win_start * 1000)
     sql = """
         SELECT model_id,
                COUNT(*)                      AS calls,
@@ -289,6 +296,7 @@ def collect_zcode() -> tuple[list[UsageRow], SourceReport]:
                 calls=int(r["calls"] or 0),
                 updated_at=(r["last"] or 0) / 1000,
                 path=str(db),
+                window=win_label,
             )
         )
     rep.rows = len(rows)
@@ -298,7 +306,7 @@ def collect_zcode() -> tuple[list[UsageRow], SourceReport]:
 # --------------------------------------------------------------------------
 # MiniMax Code —— 官方 token_usage 表
 # --------------------------------------------------------------------------
-def collect_minimax() -> tuple[list[UsageRow], SourceReport]:
+def collect_minimax(spec=None) -> tuple[list[UsageRow], SourceReport]:
     rep = SourceReport("minimax")
     db = HOME / ".minimax" / "sqlite.db"
     if not db.exists():
@@ -306,7 +314,8 @@ def collect_minimax() -> tuple[list[UsageRow], SourceReport]:
         rep.error = "未找到 ~/.minimax/sqlite.db"
         return [], rep
 
-    since = int((now_ts() - DAY) * 1000)
+    win_start, win_label = window_for(spec)
+    since = int(win_start * 1000)
     sql = """
         SELECT model,
                COUNT(*)                    AS calls,
@@ -350,18 +359,19 @@ def collect_minimax() -> tuple[list[UsageRow], SourceReport]:
                 calls=int(r["calls"] or 0),
                 updated_at=(r["last"] or 0) / 1000,
                 path=str(db),
+                window=win_label,
             )
         )
     rep.rows = len(rows)
     if not rows:
-        rep.note = "24h 内无记录"
+        rep.note = f"{win_label}内无记录"
     return rows, rep
 
 
 # --------------------------------------------------------------------------
 # Claude Code —— 本地会话 jsonl
 # --------------------------------------------------------------------------
-def collect_claude() -> tuple[list[UsageRow], SourceReport]:
+def collect_claude(spec=None) -> tuple[list[UsageRow], SourceReport]:
     rep = SourceReport("claude")
     root = HOME / ".claude" / "projects"
     if not root.exists():
@@ -369,7 +379,8 @@ def collect_claude() -> tuple[list[UsageRow], SourceReport]:
         rep.error = "未找到 ~/.claude/projects"
         return [], rep
 
-    cutoff = now_ts() - DAY
+    win_start, win_label = window_for(spec)
+    cutoff = win_start
     agg: dict[str, dict] = defaultdict(lambda: {"inp": 0, "outp": 0, "ccreate": 0, "cread": 0, "calls": 0, "last": 0.0})
     scanned = 0
     try:
@@ -433,19 +444,20 @@ def collect_claude() -> tuple[list[UsageRow], SourceReport]:
                 updated_at=a["last"] or now_ts(),
                 note="走中转，无配额",
                 path=str(root),
+                window=win_label,
             )
         )
     rows.sort(key=lambda r: r.total_tokens, reverse=True)
     rep.rows = len(rows)
     if not rows:
-        rep.note = f"24h 内无会话（扫了 {scanned} 个文件）"
+        rep.note = f"{win_label}内无会话（扫了 {scanned} 个文件）"
     return rows, rep
 
 
 # --------------------------------------------------------------------------
 # OpenCode —— 466MB 的 sqlite 里挑出最近 24h
 # --------------------------------------------------------------------------
-def collect_opencode() -> tuple[list[UsageRow], SourceReport]:
+def collect_opencode(spec=None) -> tuple[list[UsageRow], SourceReport]:
     rep = SourceReport("opencode")
     db = HOME / ".local" / "share" / "opencode" / "opencode.db"
     if not db.exists():
@@ -453,7 +465,8 @@ def collect_opencode() -> tuple[list[UsageRow], SourceReport]:
         rep.error = "未找到 opencode.db"
         return [], rep
 
-    since = int((now_ts() - DAY) * 1000)
+    win_start, win_label = window_for(spec)
+    since = int(win_start * 1000)
     sql = "SELECT time_created, data FROM message WHERE time_created > ?"
     try:
         raw = _query(db, sql, (since,))
@@ -504,12 +517,13 @@ def collect_opencode() -> tuple[list[UsageRow], SourceReport]:
                 updated_at=now_ts(),
                 note=provider,
                 path=str(db),
+                window=win_label,
             )
         )
     rows.sort(key=lambda r: r.total_tokens, reverse=True)
     rep.rows = len(rows)
     if not rows:
-        rep.note = "24h 内无记录"
+        rep.note = f"{win_label}内无记录"
     return rows, rep
 
 
@@ -523,7 +537,7 @@ def _read_json_line(s: str):
 # --------------------------------------------------------------------------
 # Hermes —— 跨 provider 的统一账本（兜底）
 # --------------------------------------------------------------------------
-def collect_hermes() -> tuple[list[UsageRow], SourceReport]:
+def collect_hermes(spec=None) -> tuple[list[UsageRow], SourceReport]:
     rep = SourceReport("hermes")
     db = HOME / ".hermes" / "state.db"
     if not db.exists():
@@ -531,7 +545,8 @@ def collect_hermes() -> tuple[list[UsageRow], SourceReport]:
         rep.error = "未找到 ~/.hermes/state.db"
         return [], rep
 
-    since = now_ts() - DAY
+    win_start, win_label = window_for(spec)
+    since = win_start
     sql = """
         SELECT billing_provider, model,
                SUM(api_call_count)   AS calls,
@@ -577,11 +592,12 @@ def collect_hermes() -> tuple[list[UsageRow], SourceReport]:
                 updated_at=float(r["last"] or now_ts()),
                 note="Hermes",
                 path=str(db),
+                window=win_label,
             )
         )
     rep.rows = len(rows)
     if not rows:
-        rep.note = "24h 内无记录"
+        rep.note = f"{win_label}内无记录"
     return rows, rep
 
 
@@ -672,7 +688,11 @@ def collect_builtin(name: str, spec=None):
         rep.ok = False
         rep.error = f"没有这个内置采集器：{name}"
         return [], rep
-    rows, rep = fn()
+    try:
+        rows, rep = fn(spec)
+    except TypeError:
+        # 老采集器没有 spec 参数
+        rows, rep = fn()
     if spec is not None:
         for r in rows:
             r.source = spec.id

@@ -8,7 +8,7 @@ dot-usage 的每个工具都是一个「源」：**去哪儿读、读什么字�
 | 顺序 | 文件 | 说明 |
 |---|---|---|
 | 1 | `src/dotusage/sources/defaults.toml` | 包内置的默认源（作者本机那 8 个工具） |
-| 2 | `~/.config/dot-usage/sources.toml` | 你的源。**同 `id` 覆盖内置项** |
+| 2 | `~/.config/dot-usage/sources.toml` | 你的源。**同 `id` 覆盖内置项**（`options` 是深合并，只覆盖你写了的键） |
 | 3 | `~/.config/dot-usage/sources.json` | 同上，JSON 写法；存在时优先于 `sources.toml` |
 
 读取代码：`src/dotusage/sources/loader.py` → `load_config()`。
@@ -71,7 +71,33 @@ TOML 用 Python 3.11+ 标准库 `tomllib` 解析，零第三方依赖。
 
 ### options：builtin / official
 
-没有 `options`。`builtin` 指定内置采集器名，`official` 指定官方 provider 名。
+`builtin` 指定内置采集器名，`official` 指定官方 provider 名。
+
+内置采集器额外认一个 option：
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `window` | string | `24h` | 统计窗口：`24h` / `today` / `7d` / `30d` / `all`，也可以写任意小时数（`48h`） |
+
+**为什么窗口要能配**：各工具自己的用量页范围都不一样。
+ZCode 的用量统计只有「全部 / 7天 / 30天」，**没有「近 24h」**；
+本地看板默认近 24h。窗口不同，数字必然对不上——想跟 ZCode 对齐，
+把那个源的 `window` 改成 `7d` 或 `30d` 就行。卡片上会写清楚当前窗口
+（近24h / 近7天 / …），不会含糊。
+
+```toml
+[[source]]
+id = "zcode"
+name = "ZCode"
+platform = "Z.ai"
+adapter = "builtin"
+builtin = "zcode"
+
+[source.options]
+window = "7d"        # 跟 ZCode 用量统计页的「近 7 天」对齐
+```
+
+用户配置是**深合并**：只写 `window` 不会把内置配置里的其它 option 抹掉。
 
 ---
 

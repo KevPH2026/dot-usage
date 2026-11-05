@@ -82,22 +82,41 @@ def _read_json(path: Path) -> dict:
         return {}
 
 
+def _merge_spec(base: dict, over: dict) -> dict:
+    """合并两层配置：用户层只覆盖它**显式写了**的字段。
+
+    为什么要深合并 options：用户配置里写了一个源，通常只想改一两项
+    （比如 window = "7d"），不该把内置配置里的其它默认值一起抹掉。
+    浅合并会让「加一个 window」变成「把整个源重置」。
+    """
+    out = dict(base)
+    for k, v in over.items():
+        if k == "options" and isinstance(v, dict) and isinstance(out.get("options"), dict):
+            merged = dict(out["options"])
+            merged.update(v)
+            out["options"] = merged
+        else:
+            out[k] = v
+    return out
+
+
 def load_config() -> list[SourceSpec]:
     """读配置 → 合并去重 → 返回源列表。"""
     merged: dict[str, dict] = {}
 
+    def apply(data: dict) -> None:
+        for item in data.get("source") or []:
+            if isinstance(item, dict) and item.get("id"):
+                sid = str(item["id"])
+                merged[sid] = _merge_spec(merged[sid], item) if sid in merged else dict(item)
+
     for path, reader in ((BUILTIN_CONFIG, _read_toml), (user_config(), _read_toml)):
         if path.exists():
-            data = reader(path)
-            for item in data.get("source") or []:
-                if isinstance(item, dict) and item.get("id"):
-                    merged[str(item["id"])] = item
+            apply(reader(path))
 
     ucfg = user_config()
     if ucfg.exists() and ucfg.suffix == ".json":
-        for item in (_read_json(ucfg).get("source") or []):
-            if isinstance(item, dict) and item.get("id"):
-                merged[str(item["id"])] = item
+        apply(_read_json(ucfg))
 
     return [SourceSpec.from_dict(v) for v in merged.values()]
 

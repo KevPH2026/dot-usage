@@ -255,8 +255,9 @@ def cmd_show(args) -> int:
 
 
 def cmd_sources(args) -> int:
-    """列出生效的数据源（id / 适配器 / 平台 / 官方配额 provider）。"""
+    """列出生效的数据源（id / 适配器 / 平台 / 官方配额 provider / 统计窗口）。"""
     from dotusage.sources import loader as srcloader
+    from dotusage.sources.window import parse_window
 
     if args.init:
         path = cfgmod.ensure_sources_config()
@@ -268,15 +269,21 @@ def cmd_sources(args) -> int:
 
     specs = srcloader.load_config()
     print(f"生效的数据源（{len(specs)} 个）：")
-    print(f"  {'ID':<12}{'适配器':<14}{'平台':<14}{'官方配额':<12}状态")
+    print(f"  {'ID':<12}{'适配器':<14}{'平台':<14}{'官方配额':<12}{'窗口':<10}状态")
     for s in specs:
+        win = ""
+        if s.options.get("window"):
+            _, win = parse_window(s.options["window"])
+        elif s.adapter == "builtin":
+            win = "近24h"
         print(
             f"  {s.id:<12}{s.adapter:<14}{(s.platform or '-'):<14}"
-            f"{(s.official or '-'):<12}{'启用' if s.enabled else '停用'}"
+            f"{(s.official or '-'):<12}{(win or '-'):<10}{'启用' if s.enabled else '停用'}"
         )
     path = cfgmod.sources_config_path()
     print()
     print(f"配置文件：{path}{'' if path.exists() else '（还没有，跑 sources --init 生成）'}")
+    print("改窗口：在对应源下面加 [source.options] window = \"7d\"（支持 24h/today/7d/30d/all）")
     return 0
 
 

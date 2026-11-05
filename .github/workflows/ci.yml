@@ -38,6 +38,35 @@ jobs:
           assert specs, '内置数据源配置读出来是空的 —— 配置读失败不能静默通过'
           print(f'内置源 {len(specs)} 个：', ', '.join(s.id for s in specs))
           "
+      - name: 统计窗口可配且能算对
+        # 窗口是拿来跟各工具自己的用量页对数字的：
+        # ZCode 的统计只有 全部/7天/30天，没有近24h，窗口不对就永远对不上账。
+        run: |
+          PYTHONPATH=src python3 -c "
+          from dotusage.sources.window import parse_window
+          import time
+          now = time.time()
+          for spec, expect_start in [('24h', now-86400), ('7d', now-7*86400), ('30d', now-30*86400)]:
+              start, label = parse_window(spec, now=now)
+              assert abs(start - expect_start) < 2, (spec, start, expect_start)
+              assert label, spec
+          start, label = parse_window('today', now=now)
+          assert label == '今天'
+          assert start <= now
+          start, label = parse_window('all')
+          assert start == 0 and label == '全部'
+          print('窗口解析 OK')
+          "
+      - name: 用户配置深合并（只覆盖写了的那几项）
+        run: |
+          PYTHONPATH=src python3 -c "
+          from dotusage.sources.loader import _merge_spec
+          base = {'id': 'x', 'adapter': 'builtin', 'options': {'window': '24h', 'db': '/a.db'}}
+          merged = _merge_spec(base, {'id': 'x', 'options': {'window': '7d'}})
+          assert merged['options'] == {'window': '7d', 'db': '/a.db'}, merged
+          assert merged['adapter'] == 'builtin'
+          print('深合并 OK')
+          "
 
   # 菜单栏 App：macOS 专属（AppKit），只能在 macOS runner 上编译。
   macos:

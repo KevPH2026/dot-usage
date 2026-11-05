@@ -167,7 +167,9 @@ class UsageRow:
             if cd:
                 bits.append(cd)
         elif self.kind == "consumption":
-            bits.append("近24h")
+            # 消耗行写清楚是哪个窗口的数——ZCode 自己的统计是 7天/30天，
+            # 本地默认近24h，窗口不同数字就对不上，标签必须说清楚。
+            bits.append(self.window or "近24h")
         if self.cost_usd:
             bits.append(f"${self.cost_usd:.2f}")
         if self.calls:
